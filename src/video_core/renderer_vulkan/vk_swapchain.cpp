@@ -157,6 +157,8 @@ bool Swapchain::Present() {
     };
 
     auto result = instance.GetPresentQueue().presentKHR(present_info);
+    if (result == vk::Result::eSuccess || result == vk::Result::eSuboptimalKHR)
+        ++successful_presents;
     if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
         needs_recreation = true;
     } else if (result == vk::Result::eErrorSurfaceLostKHR) {

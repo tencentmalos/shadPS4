@@ -124,6 +124,8 @@ Result<std::shared_ptr<SessionRuntime>> FexSessionBackend::Prepare(
             static_cast<Hle::HleCallRegistry*>(Fex::FexHleRegistryPointer(*rt->context));
         RuntimeStage("prepare: create production VM/Linker");
         rt->production = std::make_unique<GuestRuntime>(*rt->context, *rt->space, *registry);
+        if (params.create_save_dialog)
+            rt->production->ConfigureSaveDialog(params.create_save_dialog(params.generation));
         if (params.create_window) {
             if (!params.load_graphics_driver)
                 throw std::runtime_error("Rendered session requires a native driver provider");

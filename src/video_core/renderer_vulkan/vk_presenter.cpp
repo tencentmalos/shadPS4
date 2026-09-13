@@ -615,8 +615,10 @@ Frame* Presenter::PrepareLastFrame() {
     Frame* frame = last_submit_frame;
 
     while (true) {
-        vk::Result result = instance.GetDevice().waitForFences(frame->present_done, false,
-                                                               std::numeric_limits<u64>::max());
+        if (swapchain.StopRequested())
+            return nullptr;
+        vk::Result result =
+            instance.GetDevice().waitForFences(frame->present_done, false, 50'000'000);
         if (result == vk::Result::eSuccess) {
             break;
         }
@@ -686,6 +688,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     texture_cache.UpdateImage(image_id);
 
     Frame* frame = GetRenderFrame();
+    if (!frame)
+        return nullptr;
 
     const auto frame_subresources = vk::ImageSubresourceRange{
         .aspectMask = vk::ImageAspectFlagBits::eColor,
@@ -777,6 +781,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
 Frame* Presenter::PrepareBlankFrame(bool present_thread) {
     // Request a free presentation frame.
     Frame* frame = GetRenderFrame();
+    if (!frame)
+        return nullptr;
 
     auto& scheduler = present_thread ? present_scheduler : draw_scheduler;
     scheduler.EndRendering();
@@ -847,7 +853,9 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
     return frame;
 }
 
-void Presenter::Present(Frame* frame, bool is_reusing_frame) {
+bool Presenter::Present(Frame* frame, bool is_reusing_frame) {
+    if (!frame)
+        return false;
     // Free the frame for reuse
     const auto free_frame = [&] {
         if (!is_reusing_frame) {
@@ -860,7 +868,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame) {
 
     if (swapchain.StopRequested()) {
         free_frame();
-        return;
+        return false;
     }
 
     // Recreate the swapchain if the window was resized.
@@ -878,7 +886,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame) {
         // Timeout/cancel does not retire or rebuild a working swapchain. Leave
         // this frame's fence signalled so it can be safely reused next time.
         free_frame();
-        return;
+        return false;
     }
 
     // Reset fence for queue submission. Do it here instead of GetRenderFrame() because we may
@@ -1093,10 +1101,14 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame) {
     info.AddSignal(frame->present_done);
     scheduler.Flush(info);
 
+    bool presented{};
     // Present to swapchain.
     {
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
-        if (!swapchain.Present() && !swapchain.StopRequested()) {
+        const auto previous = swapchain.SuccessfulPresents();
+        const bool reusable = swapchain.Present();
+        presented = swapchain.SuccessfulPresents() > previous;
+        if (!reusable && !swapchain.StopRequested()) {
             swapchain.Recreate(window->GetWidth(), window->GetHeight());
         }
     }
@@ -1105,6 +1117,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame) {
     if (!is_reusing_frame) {
         DebugState.IncFlipFrameNum();
     }
+    return presented;
 }
 
 Frame* Presenter::GetRenderFrame() {
@@ -1112,7 +1125,9 @@ Frame* Presenter::GetRenderFrame() {
     Frame* frame;
     {
         std::unique_lock lock{free_mutex};
-        free_cv.wait(lock, [this] { return !free_queue.empty(); });
+        free_cv.wait(lock, [this] { return swapchain.StopRequested() || !free_queue.empty(); });
+        if (swapchain.StopRequested())
+            return nullptr;
         LOG_DEBUG(Render_Vulkan, "Got render frame, remaining {}", free_queue.size() - 1);
 
         // Take the frame from the queue
@@ -1124,12 +1139,17 @@ Frame* Presenter::GetRenderFrame() {
     vk::Result result{};
 
     const auto wait = [&]() {
-        result = device.waitForFences(frame->present_done, false, std::numeric_limits<u64>::max());
+        result = device.waitForFences(frame->present_done, false, 50'000'000);
         return result;
     };
 
     // Wait for the presentation to be finished so all frame resources are free
     while (wait() != vk::Result::eSuccess) {
+        if (swapchain.StopRequested()) {
+            std::scoped_lock lock(free_mutex);
+            free_queue.push(frame);
+            return nullptr;
+        }
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
                    "Device lost during waiting for a frame");
         // Retry if the waiting times out

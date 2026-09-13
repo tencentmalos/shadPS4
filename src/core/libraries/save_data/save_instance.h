@@ -50,6 +50,7 @@ class SaveInstance {
     bool exists{};
     bool mounted{};
     bool read_only{};
+    Core::FileSys::MntPoints* mounts{};
 
 public:
     // Location of all save data for a title
@@ -69,7 +70,9 @@ public:
     static void SetupDefaultParamSFO(PSF& param_sfo, std::string dir_name, std::string game_serial);
 
     explicit SaveInstance(int slot_num, Libraries::UserService::OrbisUserServiceUserId user_id,
-                          std::string game_serial, std::string_view dir_name, int max_blocks = 0);
+                          std::string game_serial, std::string_view dir_name, int max_blocks = 0,
+                          Core::FileSys::MntPoints* mounts = nullptr,
+                          std::filesystem::path explicit_save_path = {});
 
     ~SaveInstance();
 
@@ -83,6 +86,8 @@ public:
                        bool dont_restore_backup = false);
 
     void Umount();
+    // Release only the mount on failed teardown; keep the corruption marker.
+    void Abandon() noexcept;
 
     [[nodiscard]] std::filesystem::path GetIconPath() const noexcept {
         return save_path / "sce_sys" / "icon0.png";

@@ -1,0 +1,44 @@
+INSTRUMENTATION_STATUS: class=com.shadps4.android.RenderedRuntimeInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+com.shadps4.android.RenderedRuntimeInstrumentedTest:
+INSTRUMENTATION_STATUS: test=syntheticVideoOutValidatesStackArgumentsFaultsAndRestarts
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.shadps4.android.RenderedRuntimeInstrumentedTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: No four actual guest frame presents: guest return=51966
+production Linker/VM; owners=1 veneers=11 graphics=ready guest_presents=0 modules=1
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.shadps4.android.RenderedRuntimeInstrumentedTest.syntheticVideoOutValidatesStackArgumentsFaultsAndRestarts(RenderedRuntimeInstrumentedTest.kt:50)
+
+INSTRUMENTATION_STATUS: stream=
+Error in syntheticVideoOutValidatesStackArgumentsFaultsAndRestarts(com.shadps4.android.RenderedRuntimeInstrumentedTest):
+java.lang.AssertionError: No four actual guest frame presents: guest return=51966
+production Linker/VM; owners=1 veneers=11 graphics=ready guest_presents=0 modules=1
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.shadps4.android.RenderedRuntimeInstrumentedTest.syntheticVideoOutValidatesStackArgumentsFaultsAndRestarts(RenderedRuntimeInstrumentedTest.kt:50)
+
+INSTRUMENTATION_STATUS: test=syntheticVideoOutValidatesStackArgumentsFaultsAndRestarts
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 3.485
+There was 1 failure:
+1) syntheticVideoOutValidatesStackArgumentsFaultsAndRestarts(com.shadps4.android.RenderedRuntimeInstrumentedTest)
+java.lang.AssertionError: No four actual guest frame presents: guest return=51966
+production Linker/VM; owners=1 veneers=11 graphics=ready guest_presents=0 modules=1
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.shadps4.android.RenderedRuntimeInstrumentedTest.syntheticVideoOutValidatesStackArgumentsFaultsAndRestarts(RenderedRuntimeInstrumentedTest.kt:50)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1

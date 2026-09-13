@@ -189,6 +189,12 @@ private:
     std::unordered_map<u64, SmallTimer> m_small_timers;
 };
 
+class SessionEqueues {
+public:
+    virtual ~SessionEqueues() = default;
+    virtual EqueueInternal* Find(OrbisKernelEqueue handle) = 0;
+};
+void BindSessionEqueues(SessionEqueues* queues);
 EqueueInternal* GetEqueue(OrbisKernelEqueue eq);
 u64 PS4_SYSV_ABI sceKernelGetEventData(const OrbisKernelEvent* ev);
 

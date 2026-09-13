@@ -140,6 +140,19 @@ u64 MemoryManager::ClampRangeSize(VAddr virtual_addr, u64 size) {
     return clamped_size;
 }
 
+void MemoryManager::SetRasterizer(RasterizerHooks* value) {
+    rasterizer = value;
+    if (value && guest_backend) {
+        // The production loader precedes renderer creation. Replay its mapped
+        // data ranges so the GPU sees already allocated direct/flexible memory.
+        std::shared_lock lock(mutex);
+        for (const auto& [address, vma] : vma_map)
+            if (vma.IsMapped() && !True(vma.prot & MemoryProt::CpuExec) &&
+                IsValidGpuMapping(address, vma.size))
+                value->MapMemory(address, vma.size);
+    }
+}
+
 void MemoryManager::SetPrtArea(u32 id, VAddr address, u64 size) {
     PrtArea& area = prt_areas[id];
     if (area.mapped) {

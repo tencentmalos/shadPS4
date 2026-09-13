@@ -75,3 +75,5 @@ Foundation 最小构建入口已接入；反射/网络闭包与 Android 16 运�
 - [PKG → ZAR 工作流](pkg-to-zar.md)
 
 Beat Saber 的 PS4/PSVR 兼容性是独立后续目标。先验证非 VR guest 的执行、显示、输入、音频和生命周期，再推进 tracking、双眼呈现及 VR 时序。
+
+- [2026-09-13：guest 图形提交／存档直接集成、设备回归与 TMNT 真实边界](validation/android-native-host/graphics-storage-integration-2026-09-13.md)

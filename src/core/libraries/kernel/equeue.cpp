@@ -22,9 +22,17 @@ extern boost::asio::io_context io_context;
 extern void KernelSignalRequest();
 
 static std::unordered_map<s32, EqueueInternal*> kqueues;
+static std::atomic<SessionEqueues*> session_queues{};
+void BindSessionEqueues(SessionEqueues* queues) {
+    if (queues && session_queues.load())
+        throw std::logic_error("event queues already bound");
+    session_queues.store(queues);
+}
 static constexpr auto HrTimerSpinlockThresholdNs = 1200000u;
 
 EqueueInternal* GetEqueue(OrbisKernelEqueue eq) {
+    if (auto* queues = session_queues.load())
+        return queues->Find(eq);
     if (!kqueues.contains(eq)) {
         return nullptr;
     }

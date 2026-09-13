@@ -25,7 +25,7 @@ class RenderedRuntimeInstrumentedTest {
         val identity = NativeFexSession.nativeIdentity()
         var previous = 0L
         try {
-            listOf("videoout", "videoout-bad", "videoout", "videoout-format", "videoout").forEachIndexed { round, name ->
+            listOf("videoout", "gpu-flip", "videoout-bad", "gpu-flip", "videoout-format", "gpu-flip").forEachIndexed { round, name ->
                 val entry = File(root, "eboot.bin")
                 instrumentation.context.assets.open("$name.elf").use { input ->
                     entry.outputStream().use { input.copyTo(it) }
@@ -40,11 +40,15 @@ class RenderedRuntimeInstrumentedTest {
                         val outcome = NativeFexSession.nativeWaitTerminal(generation, 15000)
                         val detail = NativeFexSession.nativeTerminalDetail(generation).orEmpty()
                         android.util.Log.i("RenderedRuntimeAcceptance", "synthetic round=${round + 1} case=$name gen=$generation outcome=$outcome $identity $detail")
-                        assertEquals(detail, if (name == "videoout") NativeFexSession.Outcome.RETURNED
+                        assertEquals(detail, if (name == "videoout" || name == "gpu-flip") NativeFexSession.Outcome.RETURNED
                             else NativeFexSession.Outcome.FAULTED, outcome)
                         assertTrue(detail, detail.contains("graphics=ready"))
-                        if (name == "videoout") assertTrue(detail, detail.startsWith("guest return=51966"))
+                        if (name == "videoout" || name == "gpu-flip") assertTrue(detail, detail.startsWith("guest return=51966"))
                         else assertTrue(detail, detail.contains("import=i6-sR91Wt-4#"))
+                        if (name == "gpu-flip") {
+                            val presented = Regex("guest_presents=(\\d+)").find(detail)?.groupValues?.get(1)?.toInt() ?: 0
+                            assertTrue("No four actual guest frame presents: $detail", presented >= 4)
+                        }
                         assertEquals(identity, NativeFexSession.nativeIdentity())
                     } finally {
                         NativeFexSession.nativeRequestStop(generation, 1000)

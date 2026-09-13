@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Build a PS4-format synthetic ELF for the production Module/Linker path."""
 import argparse, pathlib, struct, subprocess, tempfile, json
-p=argparse.ArgumentParser();p.add_argument('--ndk',required=True);p.add_argument('--out',required=True);p.add_argument('--wait',action='store_true');p.add_argument('--self',action='store_true');p.add_argument('--module',action='store_true');p.add_argument('--with-dependency',action='store_true');p.add_argument('--bad-pointer',action='store_true');p.add_argument('--unknown-import',action='store_true');p.add_argument('--services',action='store_true');p.add_argument('--videoout',action='store_true');p.add_argument('--bad-format',action='store_true');p.add_argument('--libc',action='store_true');a=p.parse_args()
-scalar_only = a.services or a.videoout
+p=argparse.ArgumentParser();p.add_argument('--ndk',required=True);p.add_argument('--out',required=True);p.add_argument('--wait',action='store_true');p.add_argument('--self',action='store_true');p.add_argument('--module',action='store_true');p.add_argument('--with-dependency',action='store_true');p.add_argument('--bad-pointer',action='store_true');p.add_argument('--unknown-import',action='store_true');p.add_argument('--services',action='store_true');p.add_argument('--videoout',action='store_true');p.add_argument('--gpu-flip',action='store_true');p.add_argument('--bad-format',action='store_true');p.add_argument('--libc',action='store_true');p.add_argument('--storage',action='store_true');p.add_argument('--read-save',action='store_true');p.add_argument('--save-dialog',action='store_true');a=p.parse_args()
+if a.gpu_flip:a.videoout=True
+scalar_only = a.services or a.videoout or a.storage or a.save_dialog
 repo=pathlib.Path(__file__).resolve().parents[2]
 tools=next((pathlib.Path(a.ndk)/'toolchains/llvm/prebuilt').glob('*'))/'bin'
 out=pathlib.Path(a.out);out.parent.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='shadps4-runtime-fixture-') as tmp:
     obj=pathlib.Path(tmp)/'fixture.o';blob=pathlib.Path(tmp)/'fixture.bin'
-    subprocess.run([str(tools/'clang'),'--target=x86_64-linux-gnu','-c',str(repo/'tests/guest_cpu/fixtures'/('runtime_videoout.S' if a.videoout else 'runtime_services.S' if a.services else 'production_runtime.S')),'-o',str(obj)]+(['-DWAIT_FOREVER'] if a.wait else [])+(['-DRUNTIME_DEPENDENCY'] if a.module else [])+(['-DEXPECT_DEPENDENCY'] if a.with_dependency else [])+(['-DBAD_POINTER'] if a.bad_pointer else [])+(['-DBAD_FORMAT'] if a.bad_format else [])+(['-DBOOTSTRAP_LIBC'] if a.libc else []),check=True)
+    subprocess.run([str(tools/'clang'),'--target=x86_64-linux-gnu','-c',str(repo/'tests/guest_cpu/fixtures'/('runtime_gpu_flip.S' if a.gpu_flip else 'runtime_save_dialog.S' if a.save_dialog else 'runtime_storage.S' if a.storage else 'runtime_videoout.S' if a.videoout else 'runtime_services.S' if a.services else 'production_runtime.S')),'-o',str(obj)]+(['-DREAD_SAVE'] if a.read_save else [])+(['-DWAIT_FOREVER'] if a.wait else [])+(['-DRUNTIME_DEPENDENCY'] if a.module else [])+(['-DEXPECT_DEPENDENCY'] if a.with_dependency else [])+(['-DBAD_POINTER'] if a.bad_pointer else [])+(['-DBAD_FORMAT'] if a.bad_format else [])+(['-DBOOTSTRAP_LIBC'] if a.libc else []),check=True)
     rel=subprocess.check_output([str(tools/'llvm-readelf'),'-r',str(obj)],text=True)
     if 'There are no relocations' not in rel:raise SystemExit('fixture assembly has unresolved relocations: '+rel)
     subprocess.run([str(tools/'llvm-objcopy'),'-O','binary','--only-section=.text',str(obj),str(blob)],check=True)
@@ -17,12 +18,17 @@ with tempfile.TemporaryDirectory(prefix='shadps4-runtime-fixture-') as tmp:
 strings=bytearray(b'\0')
 def string(s):
     offset=len(strings);strings.extend(s.encode()+b'\0');return offset
-lib=string('libSceVideoOut' if a.videoout else 'libkernel')
+lib=string('libSceSaveDataDialog' if a.save_dialog else 'libSceSaveData' if a.storage else 'libSceVideoOut' if a.videoout else 'libkernel')
+third_lib=string('libkernel') if a.gpu_flip else None
+second_lib=string('libSceGnmDriver') if a.gpu_flip else string('libSceCommonDialog' if a.save_dialog else 'libkernel') if a.storage or a.save_dialog else None
 nids=['OxhIB8LB-PQ','h9CcP3J0oVM','Z4QosVuAsA0','vNe1w4diLCs','mL8NDH86iQI','vSMAm3cxYTY','cQke9UuBQOk','QcteRwbsnV0','9BcDykPmo1I','f7uOxY9mM1U','djxxOmW6-aw','+2thxYZ4syk']
 if a.services:nids=['lLMT9vJAck0','QBi7HCK03hw','9BcDykPmo1I','1j3S3n-tTW4','fgxnMeTNUtY','NhpspxdjEKU','dQHWEsJtoE4','mDmgMOGVUqg','ttHNfU+qDBU','7H0iTOciTLo','2Z+PpY6CaJg','ltCfaGr2JGE','mqULNdimTn0','6BpEZuDT7YI','WrOLvHU0yQM','0-KXaS70xy4','OxhIB8LB-PQ','h9CcP3J0oVM']
 if a.videoout:nids=['Up36PTk687E','i6-sR91Wt-4','1FZBKy8HeNU']
+if a.gpu_flip:nids=['Up36PTk687E','i6-sR91Wt-4','1FZBKy8HeNU','w3BY+tAEiQY','HXzjK9yI30k','uquVH4-Du78','xbxNatawohc','yvZ73uQUqrk','D0OdFMjp46I','fzyMKs9kim0','jpFjmgAC5AE']
+if a.storage:nids=['ZkZhskCPXFw','0z45PIH+SNI','BMR4F-Uek3E','yKDy8S5yLA0','1G3lF1Gg1k8','4wSze92BhLI','fTx66l5iWIA','oib76F-12fk','Cg4srZ6TKbU','UK2Tl2DWUns','VwadwBBBJ80','j8xKtiFj0SY','RQOqDbk3bSU','lU9YRFsgwSU']
+if a.save_dialog:nids=['s9e3+YpRnzw','4tPhsP6FpDI','ERKzksauAJA','yEiJ-qqr6Cg','YuH2FA7azqQ','uoUpLGNkygk']
 if a.unknown_import:nids[0]='UnknownRunt'
-names=[string(n+'#A#A') for n in nids]
+names=[string(n+('#C#C' if a.gpu_flip and i>=8 else '#B#B' if a.gpu_flip and i>=6 else '#B#B' if (a.storage and 4<=i<10) or (a.save_dialog and i==5) else '#A#A')) for i,n in enumerate(nids)]
 tls_name=string('fixture_tls')
 dependency_name=string('libc.prx' if a.libc else 'fixture_dependency.sprx') if a.with_dependency else None
 libc_name=string('libc') if a.libc and a.module else None
@@ -37,6 +43,12 @@ tls_relocs=b''.join(struct.pack('<QQq',0x4300+i*8,((len(nids)+(2 if a.module and
 data=bytes(strings).ljust(syms,b'\0')+symbols+relocations+tls_relocs
 # Tag values from src/core/loader/elf.h. Tables use byte offsets in DYNLIBDATA.
 dyn=[(0x61000035,0),(0x61000037,len(strings)),(0x61000039,syms),(0x6100003f,len(symbols)),(0x6100003b,24),(0x61000029,rels),(0x6100002d,len(relocations)),(0x6100002b,7),(0x6100002f,rels+len(relocations)),(0x61000031,len(tls_relocs)),(0x61000033,24),(0x6100000f,lib|(1<<40)),(0x61000015,lib|(1<<32)),(0,0)]
+if second_lib is not None:
+    dyn.insert(-1,(0x6100000f,second_lib|(1<<48)|(1<<40)))
+    dyn.insert(-1,(0x61000015,second_lib|(1<<48)|(1<<32)))
+if third_lib is not None:
+    dyn.insert(-1,(0x6100000f,third_lib|(2<<48)|(1<<40)))
+    dyn.insert(-1,(0x61000015,third_lib|(2<<48)|(1<<32)))
 if a.module:dyn.insert(-1,(12,0x100))
 if libc_name is not None:
     dyn.insert(-1,(0x6100000d,libc_name|(1<<48)|(1<<40)))
@@ -44,6 +56,7 @@ if libc_name is not None:
 if a.with_dependency:dyn.insert(-1,(1,dependency_name))
 dynamic=b''.join(struct.pack('<qQ',tag,val) for tag,val in dyn)
 ph=[(1,5,0x4000,0,0,0x4000,0x4000,0x4000),(1,6,0x8000,0x4000,0,0x4000,0x4000,0x4000),(0x61000010,6,0xc000,0x8000,0,0x4000,0x4000,0x4000),(7,4,0x8010,0x4010,0,8,64,32),(0x61000001,4,0x8100,0x4100,0,0x20,0x20,8),(2,4,0x10000,0,0,len(dynamic),len(dynamic),8),(0x61000000,4,0x14000,0,0,len(data),len(data),8)]
+if a.gpu_flip:ph.insert(3,(1,6,0,0xc000,0,0,0x8000,0x4000))
 ident=b'\x7fELF'+bytes([2,1,1,9,0])+bytes(7)
 eh=struct.pack('<16sHHIQQQIHHHHHH',ident,0xfe18 if a.module else 0xfe10,62,1,0,64,0,0,64,56,len(ph),64,0,0)
 elf=(eh+b''.join(struct.pack('<IIQQQQQQ',*h) for h in ph)).ljust(0x4000,b'\0')+payload
@@ -70,5 +83,17 @@ if a.self:
     elf = (container + b''.join(records) + header + b''.join(struct.pack('<IIQQQQQQ', *h) for h in ph)).ljust(header_size, b'\0') + b''.join(segments)
 out.write_bytes(elf)
 out.with_suffix('.disasm.txt').write_text(disassembly)
-out.with_suffix('.json').write_text(json.dumps({'kind':'synthetic PS4 ELF; no game data','libc_bootstrap':a.libc,'services':a.services,'videoout':a.videoout,'bad_format':a.bad_format,'wait':a.wait,'self':a.self,'module':a.module,'with_dependency':a.with_dependency,'bad_pointer':a.bad_pointer,'unknown_import':a.unknown_import,'expected_return':None if a.wait else 0xcafe,'imports':nids,'size':len(elf)},indent=2)+'\n')
+out.with_suffix('.json').write_text(json.dumps({'kind':'synthetic PS4 ELF; no game data','libc_bootstrap':a.libc,'services':a.services,'storage':a.storage,'read_save':a.read_save,'save_dialog':a.save_dialog,'videoout':a.videoout,'bad_format':a.bad_format,'wait':a.wait,'self':a.self,'module':a.module,'with_dependency':a.with_dependency,'bad_pointer':a.bad_pointer,'unknown_import':a.unknown_import,'expected_return':None if a.wait else 0xcafe,'imports':nids,'size':len(elf)},indent=2)+'\n')
 print(out)
+
+if a.storage and not a.read_save:
+    # Stable, synthetic title metadata; no game content. Shared across process restart tests.
+    keys=b'TITLE_ID\0INSTALL_DIR_SAVEDATA\0APP_VER\0TITLE\0'
+    values=[b'CUSA99991\0',b'CUSA99991\0',b'01.00\0',b'Production savedata contract\0']
+    key_offsets=[keys.index(name+b'\0') for name in (b'TITLE_ID',b'INSTALL_DIR_SAVEDATA',b'APP_VER',b'TITLE')]
+    table=bytearray();data=bytearray()
+    for key,value in zip(key_offsets,values):
+        table.extend(struct.pack('<H',key)+struct.pack('<H',0x0204)+struct.pack('<III',len(value),len(value),len(data)))
+        data.extend(value)
+    meta=b'\x00PSF'+struct.pack('<IIII',0x101,20+len(table),20+len(table)+len(keys),4)+table+keys+data
+    dest=out.parent/'sce_sys/param.sfo';dest.parent.mkdir(parents=True,exist_ok=True);dest.write_bytes(meta)

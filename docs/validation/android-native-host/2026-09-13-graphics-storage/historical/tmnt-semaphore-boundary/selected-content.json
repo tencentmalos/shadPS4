@@ -1,0 +1,56 @@
+{
+  "relative": "validation/tmnt-graphics-1789301482790760000",
+  "files": [
+    {
+      "path": "eboot.bin",
+      "sha256": "6122da7190de6b08d921b2c42c3ca9ed11dc4d11524f1139ff67aeceea5b204d",
+      "size": 31337969
+    },
+    {
+      "path": "sce_module/libc.prx",
+      "sha256": "e9ff426367f594a22d8122c63199c3350630ac7f46a78e4845cfa16edbea2a38",
+      "size": 1374546
+    },
+    {
+      "path": "sce_module/libSceNpToolkit2.prx",
+      "sha256": "25c60c0cd1c680fc6bbe42199a2fa14da202783fb73fd38d88eccba9b899946f",
+      "size": 830470
+    },
+    {
+      "path": "sce_module/libSceNpEntitlementAccess.prx",
+      "sha256": "bdb6d271ae53dbcee15d26a74a78597de43f0e17366c82ea0bdbcf5ff4146170",
+      "size": 10506
+    },
+    {
+      "path": "sce_module/libSceFios2.prx",
+      "sha256": "cdba7270959c106737182a4100b8d34a1c55ab2ff335ae38561733bf249c2aa8",
+      "size": 457105
+    },
+    {
+      "path": "sce_module/libSceNpCppWebApi.prx",
+      "sha256": "86567e067727049a2626e885d3cdd68acaa37b8cb663d7acb1415bcef4b6982f",
+      "size": 8367615
+    },
+    {
+      "path": "modules/libfmod.prx",
+      "sha256": "e1c11c0cffe67d84f4b90dc6469ba36ac46f51c6265632f9f6a43220e31f82b4",
+      "size": 1673676
+    },
+    {
+      "path": "modules/libfmodstudio.prx",
+      "sha256": "2b4e4ef16cbe65cc936f4df92655bd913fc4520aa03936a990c9133742c464c0",
+      "size": 1616709
+    },
+    {
+      "path": "sce_sys/param.sfo",
+      "sha256": "8d0e1b7259f12b76993de4869fae237d81d13177d4c245bd18bdc4e2357d6b14",
+      "size": 5376
+    },
+    {
+      "path": "sce_sys/about/right.sprx",
+      "sha256": "7ac46af09bedc1ff31a51977e52c959080e1213cede37d9794315a3986c72de7",
+      "size": 16025
+    }
+  ],
+  "scope": "selected base+update executable/modules/param.sfo only; not full assets"
+}

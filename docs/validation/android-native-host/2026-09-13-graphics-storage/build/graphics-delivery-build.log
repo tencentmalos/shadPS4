@@ -1,0 +1,6 @@
+tools-configure: /Users/bytedance/workspace/emulations/ps4/shadps4/build/android-host-api33/runs/1789302244579072000/tools-configure.log
+tools-build: /Users/bytedance/workspace/emulations/ps4/shadps4/build/android-host-api33/runs/1789302244579072000/tools-build.log
+host-configure: /Users/bytedance/workspace/emulations/ps4/shadps4/build/android-host-api33/runs/1789302244579072000/host-configure.log
+host-build: /Users/bytedance/workspace/emulations/ps4/shadps4/build/android-host-api33/runs/1789302244579072000/host-build.log
+elf: /Users/bytedance/workspace/emulations/ps4/shadps4/build/android-host-api33/runs/1789302244579072000/elf.log
+HOST_LINK_PASS: /Users/bytedance/workspace/emulations/ps4/shadps4/build/android-host-api33/native/libshadps4_host.so; host build only; run runtime/APK acceptance separately

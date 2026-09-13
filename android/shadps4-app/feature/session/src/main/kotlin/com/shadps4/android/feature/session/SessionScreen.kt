@@ -139,9 +139,11 @@ fun SessionScreen(
         is ManagedSessionState.Running -> sessionState.generation
         else -> 0L
     }
+    var saveDialogVisible by remember(inputGeneration) { mutableStateOf(false) }
+    SaveDataDialog(inputGeneration) { saveDialogVisible = it }
     val publishController = remember(inputGeneration) { ManagedSession.controllerPublisher(inputGeneration) }
-    DisposableEffect(inputGeneration, showStopOverlay) {
-        com.shadps4.android.runtime.input.NativePadBridge.setUiCaptured(inputGeneration,showStopOverlay)
+    DisposableEffect(inputGeneration, showStopOverlay, saveDialogVisible) {
+        com.shadps4.android.runtime.input.NativePadBridge.setUiCaptured(inputGeneration,showStopOverlay || saveDialogVisible)
         onDispose { com.shadps4.android.runtime.input.NativePadBridge.setUiCaptured(inputGeneration,false) }
     }
 

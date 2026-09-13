@@ -41,6 +41,7 @@ struct Driver;
 }
 
 namespace Core::HostRuntime {
+class GuestSaveDialog;
 
 // Opaque per-session backend resources. Concrete subclasses live in the backend
 // (FexSessionRuntime holds GuestAddressSpace/CpuContext/ThreadHandle; the test
@@ -87,6 +88,7 @@ struct SessionParams final {
     // explicit separate mode. The caller supplies the installed effective path.
     std::string executable_path;
     std::vector<std::string> module_paths;
+    std::function<std::shared_ptr<GuestSaveDialog>(std::uint64_t)> create_save_dialog;
     bool requires_platform_ready{};
     std::uint64_t generation{}; // Minted by SessionCore, never supplied by JNI.
     std::function<std::shared_ptr<Frontend::Window>(std::uint64_t)> create_window;

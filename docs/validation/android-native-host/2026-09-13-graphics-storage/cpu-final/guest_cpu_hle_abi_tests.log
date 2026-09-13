@@ -1,0 +1,23 @@
+shadPS4 HLE ABI adapter tests
+host page size: 4096
+
+[H01a ] 8 integer args: 6 in GPRs, 2 spilled to the guest stack  PASS
+[H01b ] 4th integer arg survives a syscall-style gate (r10 -> rcx) PASS
+[H01c ] 9 double args: 8 in xmm0-7, 1 spilled                    PASS
+[H01d ] mixed integer and float use independent register sequences PASS
+[H01e ] float return uses the low 32 bits of xmm0                PASS
+[H04a ] a valid guest pointer is read through                    PASS
+[H04b ] a null guest pointer is passed as null, not rejected     PASS
+[H04c ] an unmapped guest pointer is refused, native code not called PASS
+[H04d ] a read-only guest pointer is refused for a writable parameter PASS
+[H04e ] a writable guest pointer is written through              PASS
+[H04f ] an unsupported signature is refused at registration      PASS
+[H04g ] an unregistered operation is an error, not a host syscall PASS
+[H04h ] a spilled argument outside guest memory is refused       PASS
+[H04i ] operation ids are distinct and looked up by identity     PASS
+
+14/14 passed
+
+SCOPE: adapter-level. Verifies SysV placement, spill, pointer validation
+       and refusals against a hand-built frame. No FEX involved, so this
+       does not prove a real guest arrives with these registers.

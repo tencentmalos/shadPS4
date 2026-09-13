@@ -6,7 +6,9 @@
 
 ## 当前交接（2026-09-13）
 
-用户补充：本版必须正确支持存档。缺失的 libSceSaveDataDialog 是交互层，libSceSaveData 是持久化服务；二者目前均未接入生产 GuestRuntime。缺失错误不是完成或延期理由。随真实游戏推进接入会话隔离、guest 指针/文件挂载、稳定用户/标题存档目录与真实 dialog 状态；验证保存→退出→重启读回、更新保留存档及失败/取消，不能假成功或把存档放进临时内容目录。详见当前复核记录的存档补充，不另拆 spec。
+最新读[图形／存档实际集成与设备证据](docs/validation/android-native-host/graphics-storage-integration-2026-09-13.md)，它覆盖下方旧状态：GNM→VideoOut→Turnip→Surface 已由 FEX synthetic guest 三轮各呈现四帧；会话 GPU 页保护/FEX fault 分发、命令所有权/VM drain 已接。存档跨进程及 APP_VER 更新读回、生产 Compose Cancel 已过；信号量已接。host511/0、FEX244/0、Session840/0。**真实 TMNT 仍未出画面，当前 op280 pthread_attr_init，不能说所有非图形启动已完成**。下一实际工作是 attr 域和 pthread_create 消费属性，继而完整内容/实际游戏负载；不要重做初始图形接线，不另拆 spec。以下旧“RegisterBuffers 边界／保存未接”的说法作为历史保留，以此为准。
+
+用户补充：本版必须正确支持存档。缺失的 libSceSaveDataDialog 是交互层，libSceSaveData 是持久化服务；二者现已接入，范围与未覆盖模式见最新记录。缺失错误不是完成或延期理由。随真实游戏推进接入会话隔离、guest 指针/文件挂载、稳定用户/标题存档目录与真实 dialog 状态；验证保存→退出→重启读回、更新保留存档及失败/取消，不能假成功或把存档放进临时内容目录。详见当前复核记录的存档补充，不另拆 spec。
 
 最新先读[WP1复核与原生Turnip／Session图形接入](docs/validation/android-native-host/wp2-native-turnip-runtime-review-2026-09-13.md)。本轮直接修复并推进，没有新增 spec：普通 APK 已加载固定 bionic Turnip（实测 shaderInt64=1），四个 hook 仅打包、不静态变成 JNI DT_NEEDED；Session generation 持有窗口/Presenter/VideoOut/IRQ，输入桥接完成后才 PlatformReady。VideoOutOpen/Resolution/SetBufferAttribute/Vblank 已过实际 guest；SetBufferAttribute 正确解第七个栈参数。真实选取 TMNT 的新边界是 sceVideoOutRegisterBuffers（w3BY+tAEiQY, op153），并非游戏画面或可玩验收。
 

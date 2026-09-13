@@ -172,9 +172,7 @@ public:
     std::function<s32(VAddr, u64, u64, u64)> guest_call;
     ~MemoryManager();
 
-    void SetRasterizer(RasterizerHooks* rasterizer_) {
-        rasterizer = rasterizer_;
-    }
+    void SetRasterizer(RasterizerHooks* rasterizer_);
 
     AddressSpace& GetAddressSpace() {
         return impl;

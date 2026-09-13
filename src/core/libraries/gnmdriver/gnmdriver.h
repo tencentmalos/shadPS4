@@ -1,3 +1,5 @@
+#include <array>
+#include <span>
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -11,6 +13,10 @@ class SymbolsResolver;
 }
 
 namespace Libraries::GnmDriver {
+void InitializeSession();
+std::span<const u32> GetEmbeddedShader(u32 index);
+void BindEmbeddedShaders(std::array<u64, 3> addresses);
+void RequestStop();
 
 using namespace Kernel;
 

@@ -17,7 +17,13 @@ extern std::unique_ptr<Vulkan::Presenter> presenter;
 
 namespace Libraries::VideoOut {
 
-static std::unique_ptr<VideoOutDriver> driver;
+static std::unique_ptr<VideoOutDriver> desktop_driver;
+static VideoOutDriver* driver{};
+void BindSessionDriver(VideoOutDriver* value) {
+    if (value && driver)
+        throw std::logic_error("VideoOut already bound");
+    driver = value;
+}
 
 void PS4_SYSV_ABI sceVideoOutSetBufferAttribute(BufferAttribute* attribute, PixelFormat pixelFormat,
                                                 u32 tilingMode, u32 aspectRatio, u32 width,
@@ -348,6 +354,11 @@ s32 sceVideoOutSubmitEopFlip(s32 handle, u32 buf_id, u32 mode, s64 flip_arg, voi
         return ORBIS_VIDEO_OUT_ERROR_INVALID_HANDLE;
     }
 
+    if (buf_id >= MaxDisplayBuffers || port->buffer_slots[buf_id].group_index < 0)
+        return ORBIS_VIDEO_OUT_ERROR_INVALID_INDEX;
+    if (port->stopping)
+        return ORBIS_VIDEO_OUT_ERROR_RESOURCE_BUSY;
+
     Platform::IrqC::Instance()->RegisterOnce(
         Platform::InterruptId::GfxFlip, [=](Platform::InterruptId irq) {
             ASSERT_MSG(irq == Platform::InterruptId::GfxFlip, "An unexpected IRQ occured");
@@ -379,7 +390,8 @@ s32 PS4_SYSV_ABI sceVideoOutWaitVblank(s32 handle) {
 
     std::unique_lock lock{port->vo_mutex};
     const auto prev_counter = port->vblank_status.count;
-    port->vblank_cv.wait(lock, [&]() { return prev_counter != port->vblank_status.count; });
+    port->vblank_cv.wait(
+        lock, [&]() { return port->stopping || prev_counter != port->vblank_status.count; });
     return ORBIS_OK;
 }
 
@@ -465,8 +477,9 @@ s32 PS4_SYSV_ABI sceVideoOutSetWindowModeMargins(s32 handle, s32 top, s32 bottom
 }
 
 void RegisterLib(Core::Loader::SymbolsResolver* sym) {
-    driver = std::make_unique<VideoOutDriver>(EmulatorSettings.GetInternalScreenWidth(),
+    desktop_driver = std::make_unique<VideoOutDriver>(EmulatorSettings.GetInternalScreenWidth(),
                                               EmulatorSettings.GetInternalScreenHeight());
+    driver = desktop_driver.get();
 
     LIB_FUNCTION("SbU3dwp80lQ", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutGetFlipStatus);
     LIB_FUNCTION("U46NwOiJpys", "libSceVideoOut", 1, "libSceVideoOut", sceVideoOutSubmitFlip);

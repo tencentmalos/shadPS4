@@ -65,12 +65,136 @@ static constexpr std::array indirect_sgpr_offsets{0u, 0u, 0x4cu, 0u, 0xccu, 0u, 
 static constexpr bool UseNeoCompatSequences = false;
 
 // In case if `submitDone` is issued we need to block submissions until GPU idle
-static u32 submission_lock{};
+static std::atomic<u32> submission_lock{};
+static std::atomic<bool> stopping{};
 std::condition_variable cv_lock{};
 std::mutex m_submission{};
 static u64 frames_submitted{};      // frame counter
 static bool send_init_packet{true}; // initialize HW state before first game's submit in a frame
 static s32 sdk_version{0};
+
+static std::array<u64, 3> embedded_addresses{};
+static constexpr std::array ps0_code alignas(256) = {
+    0xbeeb03ffu,
+    0x00000003u, // s_mov_b32     vcc_hi, $0x00000003
+    0x7e000280u, // v_mov_b32     v0, 0
+    0x5e000100u, // v_cvt_pkrtz_f16_f32 v0, v0, v0
+    0xbf800000u, // s_nop
+    0xf8001c0fu,
+    0x00000000u, // exp           mrt0, v0, v0 compr vm done
+    0xbf810000u, // s_endpgm
+
+    // Binary header
+    0x5362724fu,
+    0x07726468u,
+    0x00002043u,
+    0u,
+    0xb0a45b2bu,
+    0x1d39766du,
+    0x72044b7bu,
+    0x0000000fu,
+    // PS regs
+    0x0fe000f0u,
+    0u,
+    0xc0000u,
+    4u,
+    0u,
+    4u,
+    2u,
+    2u,
+    0u,
+    0u,
+    0x10u,
+    0xfu,
+    0xcu,
+    0u,
+    0u,
+    0u,
+};
+static constexpr std::array ps1_code alignas(256) = {
+    0xbeeb03ffu,
+    0x00000003u, // s_mov_b32     vcc_hi, $0x00000003
+    0x7e040280u, // v_mov_b32     v2, 0
+    0xf8001803u,
+    0x02020202u, // exp           mrt0, v2, v2, off, off vm done
+    0xbf810000u, // s_endpgm
+
+    // Binary header
+    0x5362724fu,
+    0x07726468u,
+    0x00001841u,
+    0x04080002u,
+    0x98b9cb94u,
+    0u,
+    0x6f130734u,
+    0x0000000fu,
+    // PS regs
+    0x0fe000f2u,
+    0u,
+    0x2000u,
+    0u,
+    0u,
+    2u,
+    2u,
+    2u,
+    0u,
+    0u,
+    0x10u,
+    3u,
+    0xcu,
+};
+static constexpr std::array embedded_vs_code alignas(256) = {
+    0xbeeb03ffu,
+    0x00000007u, // s_mov_b32     vcc_hi, $0x00000007
+    0x36020081u, // v_and_b32     v1, 1, v0
+    0x34020281u, // v_lshlrev_b32 v1, 1, v1
+    0x360000c2u, // v_and_b32     v0, -2, v0
+    0x4a0202c1u, // v_add_i32     v1, vcc, -1, v1
+    0x4a0000c1u, // v_add_i32     v0, vcc, -1, v0
+    0x7e020b01u, // v_cvt_f32_i32 v1, v1
+    0x7e000b00U, // v_cvt_f32_i32 v0, v0
+    0x7e040280u, // v_mov_b32     v2, 0
+    0x7e0602f2u, // v_mov_b32     v3, 1.0
+    0xf80008cfu,
+    0x03020001u, // exp           pos0, v1, v0, v2, v3 done
+    0xf800020fu,
+    0x03030303u, // exp           param0, v3, v3, v3, v3
+    0xbf810000u, // s_endpgm
+
+    // Binary header
+    0x5362724fu,
+    0x07726468u,
+    0x00004047u,
+    0u,
+    0x47f8c29fu,
+    0x9b2da5cfu,
+    0xff7c5b7du,
+    0x00000017u,
+    // VS regs
+    0x0fe000f1u,
+    0u,
+    0x000c0000u,
+    4u,
+    0u,
+    4u,
+    0u,
+    7u,
+};
+std::span<const u32> GetEmbeddedShader(u32 index) {
+    switch (index) {
+    case 0:
+        return ps0_code;
+    case 1:
+        return ps1_code;
+    case 2:
+        return embedded_vs_code;
+    default:
+        throw std::invalid_argument("embedded shader index");
+    }
+}
+void BindEmbeddedShaders(std::array<u64, 3> addresses) {
+    embedded_addresses = addresses;
+}
 
 static u32 asc_next_offs_dw[Liverpool::NumComputeRings];
 
@@ -87,7 +211,24 @@ static void ResetSubmissionLock(Platform::InterruptId irq) {
 static void WaitGpuIdle() {
     HLE_TRACE;
     std::unique_lock lock{m_submission};
-    cv_lock.wait(lock, [] { return submission_lock == 0; });
+    cv_lock.wait(lock, [] { return stopping || submission_lock == 0; });
+}
+
+void RequestStop() {
+    stopping = true;
+    cv_lock.notify_all();
+}
+void InitializeSession() {
+    stopping = false;
+    submission_lock = 0;
+    frames_submitted = 0;
+    send_init_packet = true;
+    std::fill(std::begin(asc_next_offs_dw), std::end(asc_next_offs_dw), 0);
+    tessellation_factors_ring_addr = -1;
+    if (sceKernelGetCompiledSdkVersion(&sdk_version) != ORBIS_OK)
+        sdk_version = 0;
+    Platform::IrqC::Instance()->Register(Platform::InterruptId::GpuIdle, ResetSubmissionLock,
+                                         nullptr);
 }
 
 // Write a special ending NOP packet with N DWs data block
@@ -299,6 +440,8 @@ void PS4_SYSV_ABI sceGnmDingDong(u32 gnm_vqid, u32 next_offs_dw) {
     }
 
     WaitGpuIdle();
+    if (stopping)
+        return;
 
     if (DebugState.ShouldPauseInSubmit()) {
         DebugState.PauseGuestThreads();
@@ -1448,38 +1591,16 @@ s32 PS4_SYSV_ABI sceGnmSetEmbeddedPsShader(u32* cmdbuf, u32 size, u32 shader_id,
     }
 
     // clang-format off
-    constexpr static std::array ps0_code alignas(256) = {
-        0xbeeb03ffu, 0x00000003u, // s_mov_b32     vcc_hi, $0x00000003
-        0x7e000280u,              // v_mov_b32     v0, 0
-        0x5e000100u,              // v_cvt_pkrtz_f16_f32 v0, v0, v0
-        0xbf800000u,              // s_nop
-        0xf8001c0fu, 0x00000000u, // exp           mrt0, v0, v0 compr vm done
-        0xbf810000u,              // s_endpgm
 
-        // Binary header
-        0x5362724fu, 0x07726468u, 0x00002043u, 0u, 0xb0a45b2bu, 0x1d39766du, 0x72044b7bu, 0x0000000fu,
-        // PS regs
-        0x0fe000f0u, 0u, 0xc0000u, 4u, 0u, 4u, 2u, 2u, 0u, 0u, 0x10u, 0xfu, 0xcu, 0u, 0u, 0u,
-    };
 
-    const auto shader0_addr = uintptr_t(ps0_code.data()); // Original address is 0xfe000f00
-    const static u32 ps0_regs[] = {
+    const auto shader0_addr = (embedded_addresses[0] ? embedded_addresses[0] : uintptr_t(ps0_code.data())); // Original address is 0xfe000f00
+    const u32 ps0_regs[] = {
         u32(shader0_addr >> 8), u32(shader0_addr >> 40), 0xc0000u, 4u, 0u, 4u, 2u, 2u, 0u, 0u, 0x10u, 0xfu, 0xcu};
 
-    constexpr static std::array ps1_code alignas(256) = {
-        0xbeeb03ffu, 0x00000003u, // s_mov_b32     vcc_hi, $0x00000003
-        0x7e040280u,              // v_mov_b32     v2, 0 
-        0xf8001803u, 0x02020202u, // exp           mrt0, v2, v2, off, off vm done
-        0xbf810000u,              // s_endpgm
 
-        // Binary header
-        0x5362724fu, 0x07726468u, 0x00001841u, 0x04080002u, 0x98b9cb94u, 0u, 0x6f130734u, 0x0000000fu,
-        // PS regs
-        0x0fe000f2u, 0u, 0x2000u, 0u, 0u, 2u, 2u, 2u, 0u, 0u, 0x10u, 3u, 0xcu,
-    };
 
-    const auto shader1_addr = uintptr_t(ps1_code.data()); // Original address is 0xfe000f20
-    const static u32 ps1_regs[] = {
+    const auto shader1_addr = (embedded_addresses[1] ? embedded_addresses[1] : uintptr_t(ps1_code.data())); // Original address is 0xfe000f20
+    const u32 ps1_regs[] = {
         u32(shader1_addr >> 8), u32(shader1_addr >> 40), 0x2000u, 0u, 0u, 2u, 2u, 2u, 0u, 0u, 0x10u, 3u, 0xcu};
     // clang-format on
 
@@ -1518,31 +1639,14 @@ s32 PS4_SYSV_ABI sceGnmSetEmbeddedVsShader(u32* cmdbuf, u32 size, u32 shader_id,
 
     // A fullscreen triangle with one uv set
     // clang-format off
-    constexpr static std::array shader_code alignas(256) = {
-        0xbeeb03ffu, 0x00000007u, // s_mov_b32     vcc_hi, $0x00000007
-        0x36020081u,              // v_and_b32     v1, 1, v0
-        0x34020281u,              // v_lshlrev_b32 v1, 1, v1
-        0x360000c2u,              // v_and_b32     v0, -2, v0
-        0x4a0202c1u,              // v_add_i32     v1, vcc, -1, v1
-        0x4a0000c1u,              // v_add_i32     v0, vcc, -1, v0
-        0x7e020b01u,              // v_cvt_f32_i32 v1, v1
-        0x7e000b00U,              // v_cvt_f32_i32 v0, v0
-        0x7e040280u,              // v_mov_b32     v2, 0
-        0x7e0602f2u,              // v_mov_b32     v3, 1.0
-        0xf80008cfu, 0x03020001u, // exp           pos0, v1, v0, v2, v3 done
-        0xf800020fu, 0x03030303u, // exp           param0, v3, v3, v3, v3
-        0xbf810000u,              // s_endpgm
 
-        // Binary header
-        0x5362724fu, 0x07726468u, 0x00004047u, 0u, 0x47f8c29fu, 0x9b2da5cfu, 0xff7c5b7du, 0x00000017u,
-        // VS regs
-        0x0fe000f1u, 0u, 0x000c0000u, 4u, 0u, 4u, 0u, 7u,
-    };
     // clang-format on
 
-    const auto shader_addr = uintptr_t(shader_code.data()); // Original address is 0xfe000f10
-    const static u32 vs_regs[] = {
-        u32(shader_addr >> 8), u32(shader_addr >> 40), 0xc0000u, 4, 0, 4, 0, 7};
+    const auto shader_addr =
+        (embedded_addresses[2]
+             ? embedded_addresses[2]
+             : uintptr_t(embedded_vs_code.data())); // Original address is 0xfe000f10
+    const u32 vs_regs[] = {u32(shader_addr >> 8), u32(shader_addr >> 40), 0xc0000u, 4, 0, 4, 0, 7};
 
     // Normally the driver will do a call to `sceGnmSetVsShader()`, but this function has
     // a check for zero in the upper part of shader address. In our case, the address is a
@@ -2229,6 +2333,8 @@ int PS4_SYSV_ABI sceGnmSubmitCommandBuffersForWorkload(u32 workload, u32 count,
     }
 
     WaitGpuIdle();
+    if (stopping)
+        return 0x80d11000;
 
     if (DebugState.ShouldPauseInSubmit()) {
         DebugState.PauseGuestThreads();
@@ -2315,6 +2421,8 @@ int PS4_SYSV_ABI sceGnmSubmitDone() {
     HLE_TRACE;
     LOG_DEBUG(Lib_GnmDriver, "called");
     WaitGpuIdle();
+    if (stopping)
+        return 0x80d11000;
     if (!liverpool->IsGpuIdle()) {
         submission_lock = true;
     }

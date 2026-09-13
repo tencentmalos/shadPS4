@@ -1,0 +1,14 @@
+PASS independent operations
+PASS first registry identity immutable
+PASS factory descriptor remains unassigned
+PASS unsupported adoption refused
+PASS raw callback signature refused
+PASS null function refused
+PASS opaque pointer descriptor compiles and refuses
+PASS raw data buffer needs explicit policy
+PASS varargs descriptor compiles and refuses
+PASS noexcept descriptor is explicitly unsupported
+PASS callback return refused
+PASS refusals do not consume operations
+PASS original dispatch intact
+13 checks, 0 failures

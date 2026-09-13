@@ -41,18 +41,32 @@ constexpr u32 PixelFormatBpp(PixelFormat pixel_format) {
 }
 
 VideoOutDriver::VideoOutDriver(u32 width, u32 height, std::function<u64()> process_time_,
-                               std::function<u64()> tsc_)
+                               std::function<u64()> tsc_, u64* guest_labels,
+                               std::function<void(std::exception_ptr)> fault)
     : process_time(process_time_ ? std::move(process_time_)
                                  : Libraries::Kernel::sceKernelGetProcessTime),
       read_tsc(tsc_ ? std::move(tsc_) : Libraries::Kernel::sceKernelReadTsc) {
+    if (guest_labels)
+        main_port.buffer_labels =
+            std::span<u64, MaxDisplayBuffers>{guest_labels, MaxDisplayBuffers};
     main_port.resolution.full_width = width;
     main_port.resolution.full_height = height;
     main_port.resolution.pane_width = width;
     main_port.resolution.pane_height = height;
-    present_thread = std::jthread([&](std::stop_token token) { PresentThread(token); });
+    present_thread = std::jthread([this, fault = std::move(fault)](std::stop_token token) {
+        try {
+            PresentThread(token);
+        } catch (...) {
+            if (fault)
+                fault(std::current_exception());
+            else
+                throw;
+        }
+    });
 }
 
 void VideoOutDriver::RequestStop() {
+    main_port.stopping = true;
     present_thread.request_stop();
     main_port.vblank_cv.notify_all();
     main_port.vo_cv.notify_all();
@@ -77,6 +91,7 @@ int VideoOutDriver::Open(const ServiceThreadParams* params) {
 }
 
 void VideoOutDriver::Close(s32 handle) {
+    std::scoped_lock lifecycle_lock(lifecycle_mutex);
     std::scoped_lock lock{mutex};
 
     // Mark as closed
@@ -85,10 +100,13 @@ void VideoOutDriver::Close(s32 handle) {
     main_port.prev_index = -1;
 
     // Clear port information
-    std::memset(main_port.buffer_labels.data(), 0, sizeof(main_port.buffer_labels));
+    std::memset(main_port.buffer_labels.data(), 0, main_port.buffer_labels.size_bytes());
     std::memset(main_port.groups.data(), 0, sizeof(main_port.groups));
-    std::memset(&main_port.vblank_status, 0, sizeof(main_port.vblank_status));
+    // Vblank is the running display clock and continues across a port close.
+    {
+        std::scoped_lock lock(main_port.port_mutex);
     main_port.flip_status = FlipStatus{};
+    }
 
     // Re-initialize buffers
     std::memset(main_port.buffer_slots.data(), 0, sizeof(main_port.buffer_slots));
@@ -129,8 +147,8 @@ int VideoOutDriver::RegisterBuffers(VideoOutPort* port, s32 startIndex, void* co
         return ORBIS_VIDEO_OUT_ERROR_NO_EMPTY_SLOT;
     }
 
-    if (startIndex + bufferNum > MaxDisplayBuffers || startIndex > MaxDisplayBuffers ||
-        bufferNum > MaxDisplayBuffers) {
+    if (startIndex < 0 || bufferNum <= 0 || startIndex >= MaxDisplayBuffers ||
+        bufferNum > MaxDisplayBuffers - startIndex) {
         LOG_ERROR(Lib_VideoOut,
                   "Attempted to register too many buffers startIndex = {}, bufferNum = {}",
                   startIndex, bufferNum);
@@ -194,7 +212,8 @@ int VideoOutDriver::RegisterBuffers(VideoOutPort* port, s32 startIndex, void* co
 }
 
 int VideoOutDriver::UnregisterBuffers(VideoOutPort* port, s32 attributeIndex) {
-    if (attributeIndex >= MaxDisplayBufferGroups || !port->groups[attributeIndex].is_occupied) {
+    if (attributeIndex < 0 || attributeIndex >= MaxDisplayBufferGroups ||
+        !port->groups[attributeIndex].is_occupied) {
         LOG_ERROR(Lib_VideoOut, "Invalid attribute index {}", attributeIndex);
         return ORBIS_VIDEO_OUT_ERROR_INVALID_VALUE;
     }
@@ -214,7 +233,8 @@ int VideoOutDriver::UnregisterBuffers(VideoOutPort* port, s32 attributeIndex) {
 
 int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex,
                                           const BufferAttribute* attribute) {
-    if (attributeIndex >= MaxDisplayBufferGroups || !port->groups[attributeIndex].is_occupied) {
+    if (attributeIndex < 0 || attributeIndex >= MaxDisplayBufferGroups ||
+        !port->groups[attributeIndex].is_occupied) {
         LOG_ERROR(Lib_VideoOut, "Invalid attribute index {}", attributeIndex);
         return ORBIS_VIDEO_OUT_ERROR_INVALID_VALUE;
     }
@@ -251,11 +271,12 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
 }
 
 void VideoOutDriver::Flip(const Request& req) {
+    std::scoped_lock lifecycle_lock(lifecycle_mutex);
     // Update HDR status before presenting.
     presenter->SetHDR(req.port->is_hdr);
 
     // Present the frame.
-    presenter->Present(req.frame);
+    if (presenter->Present(req.frame) && req.index >= 0) ++guest_presents;
 
     // Update flip status.
     auto* port = req.port;
@@ -274,7 +295,12 @@ void VideoOutDriver::Flip(const Request& req) {
     }
 
     // Trigger flip events for the port.
-    for (auto event : port->flip_events) {
+    std::vector<Kernel::OrbisKernelEqueue> events;
+    {
+        std::scoped_lock lock(port->port_mutex);
+        events = port->flip_events;
+    }
+    for (auto event : events) {
         auto equeue = Kernel::GetEqueue(event);
         if (equeue != nullptr) {
             equeue->TriggerEvent(
@@ -296,6 +322,7 @@ void VideoOutDriver::Flip(const Request& req) {
 
 void VideoOutDriver::DrawBlankFrame() {
     const auto empty_frame = presenter->PrepareBlankFrame(true);
+    if (empty_frame)
     presenter->Present(empty_frame);
 }
 
@@ -333,6 +360,8 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
 }
 
 void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_arg, bool is_eop) {
+    if (port->stopping)
+        return;
     Vulkan::Frame* frame;
     if (index == -1) {
         frame = presenter->PrepareBlankFrame(false);
@@ -343,6 +372,8 @@ void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_
         frame = presenter->PrepareFrame(group, buffer.address_left);
     }
 
+    if (!frame)
+        return;
     std::scoped_lock lock{mutex};
     requests.push({
         .frame = frame,

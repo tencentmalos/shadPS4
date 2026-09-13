@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/guest_cpu/api/access_fault.h"
 #include "core/guest_cpu/api/address_space.h"
 
 #include <algorithm>
@@ -14,6 +15,8 @@
 #include <unistd.h>
 
 namespace Core::GuestCpu {
+std::atomic<AccessFaultHandler*> AccessFaultHandler::active{};
+std::atomic<unsigned> AccessFaultHandler::readers{};
 namespace {
 
 // Test seam for mmap/mprotect results. Production always calls the real syscall; the wrappers below
@@ -1237,8 +1240,8 @@ Status GuestAddressSpace::ReprotectUnderToken(const QuiescenceToken& token, Gues
         return MakeError(ErrorCategory::Busy, "GuestAddressSpace::ReprotectUnderToken",
                          "a pinned span overlaps this range");
     }
-    // Poison still blocks execute: a failed publication must not become reachable by reprotecting it
-    // inside a later, unrelated transaction.
+    // Poison still blocks execute: a failed publication must not become reachable by reprotecting
+    // it inside a later, unrelated transaction.
     if (HasPermission(permission, GuestPermission::Execute) &&
         std::any_of(poisoned_ranges.begin(), poisoned_ranges.end(),
                     [&](GuestRange poisoned) { return RangesOverlap(range, poisoned); })) {

@@ -35,6 +35,8 @@ public:
 
     /// Presents the current image and move to the next one
     bool Present();
+    u64 SuccessfulPresents() const { return successful_presents.load(); }
+    std::atomic<u64> successful_presents{};
 
     /// Stops subsequent acquire calls. An already-running call has a finite
     /// timeout; an image it acquired successfully must still be consumed.

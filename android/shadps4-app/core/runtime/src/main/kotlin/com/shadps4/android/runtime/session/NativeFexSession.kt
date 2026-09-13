@@ -17,6 +17,9 @@ object NativeFexSession {
     }
 
     /** page_size / pid / uid of the app process. */
+    external fun nativeSaveDialogSnapshot(generation: Long): String?
+    external fun nativeSaveDialogRespond(generation: Long, request: Long, action: Int, selection: Int): Boolean
+
     external fun nativeIdentity(): String
 
     /**

@@ -1,0 +1,56 @@
+[M32  ] segmented reservation preserves host hole            PASS
+shadPS4 guest CPU API contract tests
+host page size: 4096 bytes
+guest ABI page: 4096, code index granularity: 4096
+
+[M01a ] host page size is discovered, power of two           PASS
+[M01b ] three page quantities stay distinct                  PASS
+[M04a ] align-up reports overflow instead of wrapping        PASS
+[M01c ] map, write, read back, unmap three host pages        PASS
+[M02  ] four 4 KiB logical slices inside one host page       PASS
+[M03  ] conflicting sub-page permission is refused, state unchanged PASS
+[M04b ] malformed and conflicting requests are rejected      PASS
+[M05  ] permission is enforced on the explicit access path   PASS
+[M13  ] a pinned HLE span blocks unmap until released        PASS
+[M07  ] publication needs a live token and bumps the generation PASS
+       note: this host permits RWX mappings; publication must still use RW->RX
+[M14a ] long-term RWX is not obtainable through this API on a W^X host PASS
+[M13b ] quiesce reports Timeout when an HLE writer is still in flight PASS
+[M13c ] an active transaction excludes every writer path, not just pinned ones PASS
+[M13d ] a read-only lease cannot be used to write            PASS
+[M13e ] publication entry points reject a token from another address space PASS
+[M13f ] a publication whose backend invalidation fails leaves nothing executable PASS
+[M13g ] a pin held on one host thread races unmap/protect on another PASS
+[M13h ] a failed publication blocks execution and execute permission until repaired PASS
+[M13i ] a transaction refuses new execution, and execution refuses a transaction PASS
+[M13j ] unregistering a sink waits for an in-flight callback PASS
+[M13k ] separate failed publications require separate repairs PASS
+[M13l ] failed invalidation after a pinned write blocks execution PASS
+[M13m ] sink exceptions fail closed and release the callback lease PASS
+[M13n ] mapping mutation cannot enter an active publication or execution PASS
+[M13o ] a draining sink excludes replacement registrations   PASS
+[M24  ] same-token mutators cannot replace bytes during a sink callback PASS
+[M25  ] remap sink failure preserves backing and blocks execution until repair PASS
+[M26  ] failed drain retains admission and can finish after leases and pins release PASS
+[M21  ] token-scoped remap and reprotect need a valid quiescence token PASS
+[M22  ] remap under a token zeroes the backing and advances the mapping generation PASS
+[M23  ] reprotect under a token cannot grant execute over poisoned code PASS
+[M27  ] same-token exclusion during Publish/Remap/Protect sink callbacks PASS
+[M28  ] pre-syscall mmap/mprotect failures preserve backing and fail closed PASS
+[M29  ] token-scoped mutators reject bad ranges and a released/foreign token PASS
+[M12  ] observers get conservatively widened write notifications PASS
+[M10  ] aliases require a mapped primary range               PASS
+[L01a ] a token outliving its address space releases safely  PASS
+[L01b ] a pinned span outliving its address space releases safely PASS
+[L01c ] moved-from handles do not double release             PASS
+[M08b ] TransparentSMC and SoftwareCallbacks are refused at init PASS
+[T03a ] a fault is never masked by a simultaneous pause      PASS
+[D03a ] snapshot validity distinguishes unknown from zero    PASS
+[D03b ] public GPR numbering matches the x86-64 encoding     PASS
+[M30  ] production VM splitting, holes and transaction refusal PASS
+[M31  ] production VM syscall failure poisons execution and preserves error PASS
+
+46/46 passed
+
+SCOPE: host-only. Proves page arithmetic and POSIX mapping semantics
+       at the real host page size. Proves nothing about bionic, ART or FEX.

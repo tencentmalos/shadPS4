@@ -1,7 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstring>
 #include <iostream>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #include <magic_enum/magic_enum.hpp>
 
@@ -48,6 +53,24 @@ static const std::unordered_map<int, std::string> default_title = {
 
 namespace Libraries::SaveData {
 
+namespace {
+void SyncMetadata(const fs::path& path, bool directory = false) {
+#ifndef _WIN32
+    const int fd =
+        ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | (directory ? O_DIRECTORY : 0));
+    if (fd < 0)
+        throw fs::filesystem_error("Save metadata open", path,
+                                   std::error_code(errno, std::generic_category()));
+    const int result = ::fsync(fd);
+    const int error = errno;
+    ::close(fd);
+    if (result)
+        throw fs::filesystem_error("Save metadata sync", path,
+                                   std::error_code(error, std::generic_category()));
+#endif
+}
+} // namespace
+
 fs::path SaveInstance::MakeTitleSavePath(Libraries::UserService::OrbisUserServiceUserId user_id,
                                          std::string_view game_serial) {
     return EmulatorSettings.GetHomeDir() / std::to_string(user_id) / "savedata" / game_serial;
@@ -62,10 +85,19 @@ fs::path SaveInstance::MakeDirSavePath(OrbisUserServiceUserId user_id, std::stri
 uint64_t SaveInstance::GetMaxBlockFromSFO(const PSF& psf) {
     const auto vec = psf.GetBinary(std::string{SaveParams::SAVEDATA_BLOCKS});
     if (!vec.has_value()) {
-        return OrbisSaveDataBlocksMax;
+        throw fs::filesystem_error("Missing savedata capacity",
+                                   std::make_error_code(std::errc::illegal_byte_sequence));
     }
     auto value = vec.value();
-    return *(uint64_t*)value.data();
+    if (value.size() != sizeof(uint64_t))
+        throw fs::filesystem_error("Invalid savedata blocks",
+                                   std::make_error_code(std::errc::illegal_byte_sequence));
+    uint64_t blocks{};
+    std::memcpy(&blocks, value.data(), sizeof(blocks));
+    if (blocks < OrbisSaveDataBlocksMin2 || blocks > OrbisSaveDataBlocksMax)
+        throw fs::filesystem_error("Invalid savedata capacity",
+                                   std::make_error_code(std::errc::illegal_byte_sequence));
+    return blocks;
 }
 
 fs::path SaveInstance::GetParamSFOPath(const fs::path& dir_path) {
@@ -93,13 +125,16 @@ void SaveInstance::SetupDefaultParamSFO(PSF& param_sfo, std::string dir_name,
 }
 
 SaveInstance::SaveInstance(int slot_num, Libraries::UserService::OrbisUserServiceUserId user_id,
-                           std::string _game_serial, std::string_view _dir_name, int max_blocks)
+                           std::string _game_serial, std::string_view _dir_name, int max_blocks,
+                           Core::FileSys::MntPoints* explicit_mounts, fs::path explicit_save_path)
     : slot_num(slot_num), user_id(user_id), game_serial(std::move(_game_serial)),
       dir_name(_dir_name),
       max_blocks(std::clamp(max_blocks, OrbisSaveDataBlocksMin2, OrbisSaveDataBlocksMax)) {
     ASSERT(slot_num >= 0 && slot_num < 16);
 
-    save_path = MakeDirSavePath(user_id, game_serial, dir_name);
+    mounts = explicit_mounts ? explicit_mounts : GetMounts();
+    save_path = explicit_save_path.empty() ? MakeDirSavePath(user_id, game_serial, dir_name)
+                                           : std::move(explicit_save_path);
 
     const auto sce_sys_path = save_path / sce_sys;
     param_sfo_path = sce_sys_path / "param.sfo";
@@ -108,12 +143,23 @@ SaveInstance::SaveInstance(int slot_num, Libraries::UserService::OrbisUserServic
     mount_point = "/savedata" + std::to_string(slot_num);
 
     this->exists = fs::exists(param_sfo_path);
-    this->mounted = GetMounts()->GetMount(mount_point) != nullptr;
+    this->mounted = mounts->GetMount(mount_point) != nullptr;
 }
 
 SaveInstance::~SaveInstance() {
     if (mounted) {
-        Umount();
+        try {
+            Umount();
+        } catch (const std::exception& e) {
+            LOG_ERROR(Lib_SaveData, "Save teardown failed: {}", e.what());
+            Abandon();
+        }
+    }
+}
+void SaveInstance::Abandon() noexcept {
+    if (mounted) {
+        mounts->Unmount(save_path, mount_point);
+        mounted = false;
     }
 }
 SaveInstance::SaveInstance(SaveInstance&& other) noexcept {
@@ -125,6 +171,15 @@ SaveInstance::SaveInstance(SaveInstance&& other) noexcept {
 SaveInstance& SaveInstance::operator=(SaveInstance&& other) noexcept {
     if (this == &other)
         return *this;
+    if (mounted) {
+        try {
+            Umount();
+        } catch (const std::exception& e) {
+            LOG_ERROR(Lib_SaveData, "Save replacement flush failed: {}", e.what());
+            Abandon(); // Keep the corruption marker if persistence failed.
+        }
+    }
+    mounts = other.mounts;
     slot_num = other.slot_num;
     user_id = other.user_id;
     game_serial = std::move(other.game_serial);
@@ -153,7 +208,7 @@ void SaveInstance::SetupAndMount(bool read_only, bool copy_icon, bool ignore_cor
     if (!exists) {
         CreateFiles();
         if (copy_icon) {
-            if (auto bytes = GetMounts()->ReadFile("/app0/sce_sys/save_data.png")) {
+            if (auto bytes = mounts->ReadFile("/app0/sce_sys/save_data.png")) {
                 auto output_icon = GetIconPath();
                 if (fs::exists(output_icon)) {
                     fs::remove(output_icon);
@@ -179,6 +234,7 @@ void SaveInstance::SetupAndMount(bool read_only, bool copy_icon, bool ignore_cor
             if (Backup::Restore(save_path)) {
                 return SetupAndMount(read_only, copy_icon, ignore_corrupt, true);
             }
+            throw err.value();
         }
     }
 
@@ -189,7 +245,7 @@ void SaveInstance::SetupAndMount(bool read_only, bool copy_icon, bool ignore_cor
 
     max_blocks = static_cast<int>(GetMaxBlockFromSFO(param_sfo));
 
-    GetMounts()->Mount(save_path, mount_point, read_only);
+    mounts->Mount(save_path, mount_point, read_only);
     mounted = true;
     this->read_only = read_only;
 }
@@ -199,16 +255,24 @@ void SaveInstance::Umount() {
         UNREACHABLE_MSG("Save instance is not mounted");
         return;
     }
-    mounted = false;
-    const bool ok = param_sfo.Encode(param_sfo_path);
-    if (!ok) {
-        throw fs::filesystem_error("Failed to write param.sfo", param_sfo_path,
-                                   std::make_error_code(std::errc::permission_denied));
+    if (!read_only) {
+        // Preserve the old metadata if serialization fails. The corruption
+        // marker stays until both metadata and mount retirement succeed.
+        const auto pending = param_sfo_path.string() + ".pending";
+        if (!param_sfo.Encode(pending)) {
+            throw fs::filesystem_error("Failed to write param.sfo", param_sfo_path,
+                                       std::make_error_code(std::errc::io_error));
+        }
+        SyncMetadata(pending);
+        fs::rename(pending, param_sfo_path);
+        SyncMetadata(param_sfo_path.parent_path(), true);
+        fs::remove(corrupt_file_path);
+        SyncMetadata(param_sfo_path.parent_path(), true);
+        SyncMetadata(save_path, true);
     }
+    mounts->Unmount(save_path, mount_point);
+    mounted = false;
     param_sfo = PSF();
-
-    fs::remove(corrupt_file_path);
-    GetMounts()->Unmount(save_path, mount_point);
 }
 
 void SaveInstance::CreateFiles() {

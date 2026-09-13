@@ -203,12 +203,16 @@ struct PageManager::Impl {
         auto& impl = memory->GetAddressSpace();
         ASSERT_MSG(perms != Core::MemoryPermission::Write,
                    "Attempted to protect region as write-only which is not a valid permission");
-        impl.Protect(address, size, perms);
+        impl.ProtectGpu(address, size, perms);
     }
 
     static bool GuestFaultSignalHandler(void* context, void* fault_address) {
         const auto addr = reinterpret_cast<VAddr>(fault_address);
-        if (Common::IsWriteError(context)) {
+        auto& space = Core::Memory::Instance()->GetAddressSpace();
+        const bool write = Common::IsWriteError(context);
+        if (space.IsGuestBackend() && !space.IsGpuWatchFault(addr, write))
+            return false;
+        if (write) {
             return rasterizer->InvalidateMemory(addr, 8);
         } else {
             return rasterizer->ReadMemory(addr, 8);

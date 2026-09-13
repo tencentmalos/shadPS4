@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <functional>
 #include <mutex>
+#include <span>
 #include <queue>
 
 namespace Vulkan {
@@ -22,7 +23,9 @@ namespace Libraries::VideoOut {
 struct VideoOutPort {
     SceVideoOutResolutionStatus resolution;
     std::array<VideoOutBuffer, MaxDisplayBuffers> buffer_slots;
-    std::array<u64, MaxDisplayBuffers> buffer_labels; // should be contiguous in memory
+    std::array<u64, MaxDisplayBuffers> local_labels{};
+    std::span<u64, MaxDisplayBuffers> buffer_labels{local_labels};
+    std::atomic<bool> stopping{false};
     static_assert(sizeof(buffer_labels[0]) == 8u);
     std::array<BufferAttributeGroup, MaxDisplayBufferGroups> groups;
     FlipStatus flip_status;
@@ -33,7 +36,7 @@ struct VideoOutPort {
     std::mutex port_mutex;
     std::condition_variable vo_cv;
     std::condition_variable vblank_cv;
-    int flip_rate = 0;
+    std::atomic<int> flip_rate{0};
     int prev_index = -1;
     std::atomic<bool> is_open{false};
     bool is_hdr = false;
@@ -54,7 +57,7 @@ struct VideoOutPort {
 
     void WaitVoLabel(auto&& pred) {
         std::unique_lock lk{vo_mutex};
-        vo_cv.wait(lk, pred);
+        vo_cv.wait(lk, [&] { return stopping || pred(); });
     }
 
     void SignalVoLabel() {
@@ -79,8 +82,10 @@ struct ServiceThreadParams {
 class VideoOutDriver {
 public:
     VideoOutDriver(u32 width, u32 height, std::function<u64()> process_time = {},
-                   std::function<u64()> tsc = {});
+                   std::function<u64()> tsc = {}, u64* guest_labels = nullptr,
+                   std::function<void(std::exception_ptr)> fault = {});
     void RequestStop();
+    std::atomic<u64> guest_presents{};
     void Join();
     ~VideoOutDriver();
 
@@ -118,6 +123,7 @@ private:
 
     std::function<u64()> process_time;
     std::function<u64()> read_tsc;
+    std::mutex lifecycle_mutex;
     std::mutex mutex;
     VideoOutPort main_port{};
     std::jthread present_thread;

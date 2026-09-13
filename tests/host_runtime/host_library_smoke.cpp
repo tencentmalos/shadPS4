@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Link this to the complete host DSO on Android; on the build host the portable
 // frontend/control sources can be linked directly. No game, GPU or APK acceptance.
-#include "common/poll_timeout.h"
-#include "core/host_runtime/application_control.h"
-#include "frontend/window.h"
 #include <atomic>
 #include <climits>
 #include <condition_variable>
@@ -11,6 +8,9 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include "common/poll_timeout.h"
+#include "core/host_runtime/application_control.h"
+#include "frontend/window.h"
 #ifdef __ANDROID__
 #include <cstring>
 #include <fstream>
@@ -39,6 +39,10 @@ static unsigned checks{}, failures{};
     } while (0)
 
 #ifdef __ANDROID__
+#include "guest_graphics_checks.h"
+#include "guest_semaphore_checks.h"
+#include "guest_storage_checks.h"
+
 static void CheckPassiveSignals() {
     constexpr int signals[] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP, SIGSYS, SIGUSR1, SIGSLEEP};
     struct sigaction before[std::size(signals)]{};
@@ -215,6 +219,7 @@ struct TestControl final : Core::HostRuntime::ApplicationControl {
 int main(int argc, char **argv) {
 #ifdef __ANDROID__
     CheckPassiveSignals();
+    CheckGpuContracts();
     if (argc != 2) {
         std::fprintf(stderr, "usage: host_library_smoke <absolute-user-data-directory>\n");
         return 2;
@@ -264,6 +269,9 @@ int main(int argc, char **argv) {
     CHECK(changed);
     CHECK(GetUserPath(PathType::UserDir) == root);
     CheckLoaderAndAudio(root);
+    CheckGuestSemaphores();
+    CheckGuestStorage(root);
+    CheckSaveDialog(root);
 #endif
     using namespace Core::HostRuntime;
     CHECK(!Frontend::AcquireWindow());

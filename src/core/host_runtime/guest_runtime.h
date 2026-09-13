@@ -15,6 +15,7 @@ struct Driver;
 }
 
 namespace Core::HostRuntime {
+class GuestSaveDialog;
 // One production Linker/MemoryManager/thread domain per Session generation.
 // CPU implementation is injected; this library never links a second FEX runtime.
 class GuestRuntime final {
@@ -26,6 +27,7 @@ public:
     ~GuestRuntime();
     GuestRuntime(const GuestRuntime&) = delete;
     GuestRuntime& operator=(const GuestRuntime&) = delete;
+    void ConfigureSaveDialog(std::shared_ptr<GuestSaveDialog> dialog);
     void ConfigureGraphics(std::shared_ptr<Frontend::Window> window,
                            std::shared_ptr<const Vulkan::Driver> driver);
     void Prepare(const std::filesystem::path& executable,

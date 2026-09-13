@@ -33,6 +33,12 @@ public:
     virtual void* MapFile(VAddr address, u64 size, u64 offset, u32 prot, uintptr_t fd) = 0;
     virtual void Unmap(VAddr address, u64 size) = 0;
     virtual void Protect(VAddr address, u64 size, MemoryPermission permission) = 0;
+    virtual void ProtectGpu(VAddr address, u64 size, MemoryPermission permission) {
+        Protect(address, size, permission);
+    }
+    virtual bool IsGpuWatchFault(VAddr address, bool write) const {
+        return false;
+    }
 };
 
 /**
@@ -40,6 +46,18 @@ public:
  */
 class AddressSpace {
 public:
+    void ProtectGpu(VAddr address, u64 size, MemoryPermission permission) {
+        if (guest)
+            guest->ProtectGpu(address, size, permission);
+        else
+            Protect(address, size, permission);
+    }
+    bool IsGuestBackend() const {
+        return guest != nullptr;
+    }
+    bool IsGpuWatchFault(VAddr address, bool write) const {
+        return guest && guest->IsGpuWatchFault(address, write);
+    }
     explicit AddressSpace();
     explicit AddressSpace(GuestMemoryBackend* guest);
     ~AddressSpace();

@@ -1,0 +1,28 @@
+--------- beginning of main
+09-13 20:26:49.302  8156  8178 I ProductionRuntime: prepare: reserve guest VA
+09-13 20:26:49.303  8156  8178 I ProductionRuntime: prepare: create FEX context
+09-13 20:26:49.303  8156  8178 I ProductionRuntime: prepare: create production VM/Linker
+09-13 20:26:49.429  8156  8178 I ProductionRuntime: prepare: load/relocate modules
+09-13 20:26:49.431  8156  8178 I ProductionRuntime: prepare: ready
+09-13 20:26:49.431  8156  8178 I ProductionRuntime: run: enter production guest
+09-13 20:26:49.477  8156  8178 I ProductionRuntime: run: guest returned to host
+09-13 20:26:49.478  8156  8174 I StorageRuntimeAcceptance: stage=write case=storage gen=1 outcome=0 page_size=4096 pid=8156 uid=10157 guest return=51966
+09-13 20:26:49.478  8156  8174 I StorageRuntimeAcceptance: production Linker/VM; owners=1 veneers=14 graphics=not-created modules=1
+09-13 20:26:49.480  8156  8183 I ProductionRuntime: prepare: reserve guest VA
+09-13 20:26:49.481  8156  8183 I ProductionRuntime: prepare: create FEX context
+09-13 20:26:49.481  8156  8183 I ProductionRuntime: prepare: create production VM/Linker
+09-13 20:26:49.587  8156  8183 I ProductionRuntime: prepare: load/relocate modules
+09-13 20:26:49.590  8156  8183 I ProductionRuntime: prepare: ready
+09-13 20:26:49.591  8156  8183 I ProductionRuntime: run: enter production guest
+09-13 20:26:49.595  8156  8183 I ProductionRuntime: run: guest returned to host
+09-13 20:26:49.596  8156  8174 I StorageRuntimeAcceptance: stage=write case=storage-read gen=2 outcome=0 page_size=4096 pid=8156 uid=10157 guest return=51966
+09-13 20:26:49.596  8156  8174 I StorageRuntimeAcceptance: production Linker/VM; owners=1 veneers=14 graphics=not-created modules=1
+09-13 20:26:49.597  8156  8185 I ProductionRuntime: prepare: reserve guest VA
+09-13 20:26:49.597  8156  8185 I ProductionRuntime: prepare: create FEX context
+09-13 20:26:49.598  8156  8185 I ProductionRuntime: prepare: create production VM/Linker
+09-13 20:26:49.704  8156  8185 I ProductionRuntime: prepare: load/relocate modules
+09-13 20:26:49.707  8156  8185 I ProductionRuntime: prepare: ready
+09-13 20:26:49.707  8156  8185 I ProductionRuntime: run: enter production guest
+09-13 20:26:50.318  8156  8185 I ProductionRuntime: run: guest returned to host
+09-13 20:26:50.354  8156  8174 I StorageRuntimeAcceptance: stage=write case=save-dialog gen=3 outcome=0 page_size=4096 pid=8156 uid=10157 guest return=51966
+09-13 20:26:50.354  8156  8174 I StorageRuntimeAcceptance: production Linker/VM; owners=1 veneers=6 graphics=not-created modules=1

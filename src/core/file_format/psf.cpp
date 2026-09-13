@@ -38,66 +38,81 @@ bool PSF::Open(const std::filesystem::path& filepath) {
     }
 
     const u64 psfSize = file.GetSize();
-    ASSERT_MSG(psfSize != 0, "SFO file at {} is empty!", filepath.string());
+    if (psfSize < sizeof(PSFHeader))
+        return false;
     std::vector<u8> psf(psfSize);
     file.Seek(0);
-    file.Read(psf);
+    if (file.Read(psf) != psf.size())
+        return false;
     file.Close();
     return Open(psf);
 }
 
 bool PSF::Open(const std::vector<u8>& psf_buffer) {
-    const u8* psf_data = psf_buffer.data();
-
-    entry_list.clear();
-    map_binaries.clear();
-    map_strings.clear();
-    map_integers.clear();
-
-    // Parse file contents
+    // Metadata is untrusted (including damaged saves). Parse transactionally;
+    // invalid lengths/types must never assert or read outside the input buffer.
+    if (psf_buffer.size() < sizeof(PSFHeader))
+        return false;
+    const auto* bytes = psf_buffer.data();
+    const auto length = psf_buffer.size();
     PSFHeader header{};
-    std::memcpy(&header, psf_data, sizeof(header));
-
-    if (header.magic != PSF_MAGIC) {
-        LOG_ERROR(Core, "Invalid PSF magic number");
+    std::memcpy(&header, bytes, sizeof(header));
+    if (header.magic != PSF_MAGIC ||
+        (header.version != PSF_VERSION_1_0 && header.version != PSF_VERSION_1_1))
         return false;
-    }
-    if (header.version != PSF_VERSION_1_1 && header.version != PSF_VERSION_1_0) {
-        LOG_ERROR(Core, "Unsupported PSF version: 0x{:08x}", header.version);
+    const size_t count = header.index_table_entries;
+    if (count > (length - sizeof(header)) / sizeof(PSFRawEntry))
         return false;
-    }
-
-    for (u32 i = 0; i < header.index_table_entries; i++) {
-        PSFRawEntry raw_entry{};
-        std::memcpy(&raw_entry, psf_data + sizeof(PSFHeader) + i * sizeof(PSFRawEntry),
-                    sizeof(raw_entry));
-
-        Entry& entry = entry_list.emplace_back();
-        entry.key = std::string{(char*)(psf_data + header.key_table_offset + raw_entry.key_offset)};
-        entry.param_fmt = static_cast<PSFEntryFmt>(raw_entry.param_fmt.Raw());
-        entry.max_len = raw_entry.param_max_len;
-
-        const u8* data = psf_data + header.data_table_offset + raw_entry.data_offset;
-
+    const size_t keys = header.key_table_offset, data_base = header.data_table_offset;
+    if (keys < sizeof(header) + count * sizeof(PSFRawEntry) || keys > data_base ||
+        data_base > length)
+        return false;
+    PSF parsed;
+    parsed.last_write = last_write;
+    for (size_t i = 0; i < count; ++i) {
+        PSFRawEntry raw{};
+        std::memcpy(&raw, bytes + sizeof(header) + i * sizeof(raw), sizeof(raw));
+        if (raw.key_offset >= data_base - keys || raw.param_len > raw.param_max_len ||
+            raw.data_offset > length - data_base ||
+            raw.param_max_len > length - data_base - raw.data_offset)
+            return false;
+        const char* key = reinterpret_cast<const char*>(bytes + keys + raw.key_offset);
+        const auto* key_end =
+            static_cast<const char*>(std::memchr(key, 0, data_base - keys - raw.key_offset));
+        if (!key_end || key == key_end)
+            return false;
+        Entry entry{std::string(key, key_end), static_cast<PSFEntryFmt>(raw.param_fmt.Raw()),
+                    raw.param_max_len};
+        if (std::ranges::any_of(parsed.entry_list,
+                                [&](const Entry& e) { return e.key == entry.key; }))
+            return false;
+        const u8* data = bytes + data_base + raw.data_offset;
         switch (entry.param_fmt) {
-        case PSFEntryFmt::Binary: {
-            std::vector<u8> value(raw_entry.param_len);
-            std::memcpy(value.data(), data, raw_entry.param_len);
-            map_binaries.emplace(i, std::move(value));
-        } break;
+        case PSFEntryFmt::Binary:
+            parsed.map_binaries.emplace(i, std::vector<u8>(data, data + raw.param_len));
+            break;
         case PSFEntryFmt::Text: {
-            std::string c_str{reinterpret_cast<const char*>(data)};
-            map_strings.emplace(i, std::move(c_str));
-        } break;
-        case PSFEntryFmt::Integer: {
-            ASSERT_MSG(raw_entry.param_len == sizeof(s32), "PSF integer entry size mismatch");
-            s32 integer = *(s32*)data;
-            map_integers.emplace(i, integer);
-        } break;
-        default:
-            UNREACHABLE_MSG("Unknown PSF entry format");
+            const auto* end = static_cast<const u8*>(std::memchr(data, 0, raw.param_len));
+            if (!end)
+                return false;
+            parsed.map_strings.emplace(
+                i, std::string(reinterpret_cast<const char*>(data), end - data));
+            break;
         }
+        case PSFEntryFmt::Integer: {
+            if (raw.param_len != sizeof(s32))
+                return false;
+            s32 value{};
+            std::memcpy(&value, data, sizeof(value));
+            parsed.map_integers.emplace(i, value);
+            break;
+        }
+        default:
+        return false;
     }
+        parsed.entry_list.push_back(std::move(entry));
+    }
+    *this = std::move(parsed);
     return true;
 }
 

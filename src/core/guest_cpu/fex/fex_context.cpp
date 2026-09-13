@@ -3,6 +3,7 @@
 
 #include "core/guest_cpu/fex/entry_backedge_pass.h"
 #include "core/guest_cpu/fex/fex_context.h"
+#include "core/guest_cpu/api/access_fault.h"
 #if defined(GUEST_CPU_TEST_HOOKS)
 #include "core/guest_cpu/fex/test_run_gate.h"
 #endif
@@ -264,6 +265,12 @@ void InterruptFaultHandler(int signal, siginfo_t *info, void *raw_context) {
         uc->uc_mcontext.regs[28] = reinterpret_cast<std::uintptr_t>(binding->native->CurrentFrame);
         uc->uc_mcontext.pc = binding->stop_spill;
         return;
+    }
+    if (info && info->si_code == SEGV_ACCERR) {
+        const int saved_errno = errno;
+        const bool handled = AccessFaultHandler::Dispatch(raw_context, info->si_addr);
+        errno = saved_errno;
+        if (handled) return;
     }
     // A JIT PC alone does not prove a guest access fault or an exact guest RIP.
     // Emit a bounded, allocation-free diagnostic and forward unchanged. Do not

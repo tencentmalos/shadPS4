@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "core/host_runtime/guest_graphics_hle.h"
 #include <atomic>
 #include <condition_variable>
 #include <cstdlib>
@@ -21,8 +22,11 @@
 #include "core/host_runtime/guest_clock.h"
 #include "core/host_runtime/guest_graphics.h"
 #include "core/host_runtime/guest_mutex.h"
+#include "core/host_runtime/guest_semaphore.h"
 #include "core/host_runtime/guest_platform.h"
 #include "core/host_runtime/guest_runtime.h"
+#include "core/host_runtime/guest_save_dialog.h"
+#include "core/host_runtime/guest_storage_hle.h"
 #include "core/libraries/gnmdriver/gnmdriver.h"
 #include "core/libraries/kernel/memory.h"
 #include "core/libraries/kernel/orbis_error.h"
@@ -111,9 +115,16 @@ struct GuestRuntime::Impl final : GuestMemoryBackend {
     GuestAddressSpace& space;
     HleCallRegistry& registry;
     GuestClock clock;
+    std::unique_ptr<GuestStorage> storage;
+    std::shared_ptr<GuestSaveDialog> save_dialog;
     std::shared_ptr<Frontend::Window> graphics_window;
     std::shared_ptr<const Vulkan::Driver> graphics_driver;
     std::unique_ptr<GuestGraphics> graphics;
+    // CPU VM permissions and GPU watch permissions are separate. Signal-time
+    // watch retirement must not take the VM transaction lock or retire FEX code.
+    std::unique_ptr<std::atomic<u8>[]> gpu_pages =
+        std::make_unique<std::atomic<u8>[]>(ReservationEnd / 4096);
+    u64 video_labels{};
     std::mutex graphics_init_mutex;
     std::mutex graphics_mutex;
 
@@ -124,21 +135,34 @@ struct GuestRuntime::Impl final : GuestMemoryBackend {
                 throw std::runtime_error("VideoOut requires a session Surface and verified Turnip");
             if (cancelling)
                 throw std::runtime_error("Graphics initialization cancelled");
+            if (!video_labels) {
+                VmGuard vm(*this);
+                video_labels = Allocate(0x4000, "VideoOutLabelsAndShaders");
+                for (u32 i = 0; i < 3; ++i)
+                    Require(space.PublishCode(
+                        *vm_token,
+                        {GuestAddress{video_labels + (i + 1) * 4096},
+                         Libraries::GnmDriver::GetEmbeddedShader(i).size_bytes()},
+                        std::as_bytes(Libraries::GnmDriver::GetEmbeddedShader(i))));
+            }
             auto created = std::make_unique<GuestGraphics>(
                 graphics_window, graphics_driver,
                 [this] { return clock.ticks.GetTimeUS(clock.origin); },
                 [this] { return clock.ticks.GetUptime(); },
-                [this] { return platform->SplashVisible(); });
+                [this] { return platform->SplashVisible(); }, video_labels,
+                [this] { (void)Cancel(); });
             std::scoped_lock lock(graphics_mutex);
             if (cancelling)
                 created->RequestStop();
             graphics = std::move(created);
             sysmodules.Publish("libSceVideoOut", 0x10000004);
         }
+        graphics->CheckHealth();
         return *graphics;
     }
 
     std::unique_ptr<GuestMutexDomain> mutex_domain;
+    std::unique_ptr<GuestSemaphoreDomain> semaphore_domain;
     int backing_fd{-1};
     u8* backing{};
     static constexpr u64 BackingSize = 12ULL << 30;
@@ -161,6 +185,7 @@ struct GuestRuntime::Impl final : GuestMemoryBackend {
     std::string program_name;
     std::map<std::string, std::function<Status(HleCallFrame&)>> handlers;
     std::vector<std::string> refused;
+    std::set<std::string> graphics_gnm_nids, graphics_video_nids;
     std::atomic<bool> cancelling{};
     mutable std::mutex threads_mutex;
     std::condition_variable threads_changed;
@@ -203,6 +228,13 @@ struct GuestRuntime::Impl final : GuestMemoryBackend {
         explicit VmGuard(Impl& rt) : rt(rt), lock(rt.vm_mutex), outer(!rt.vm_token) {
             if (outer) {
                 rt.vm_token.emplace(Require(rt.cpu.QuiesceContext(2'000'000'000)));
+                try {
+                    if (rt.graphics)
+                        rt.graphics->WaitIdle();
+                } catch (...) {
+                    rt.vm_token.reset();
+                    throw;
+                }
             }
         }
         ~VmGuard() {
@@ -353,6 +385,7 @@ struct GuestRuntime::Impl final : GuestMemoryBackend {
         for (auto& [id, o] : owners)
             if (o->worker.joinable())
                 o->worker.join();
+        storage.reset();
         graphics.reset();
         graphics_window.reset();
         graphics_driver.reset();
@@ -384,6 +417,16 @@ struct GuestRuntime::Impl final : GuestMemoryBackend {
 
         Require(space.UpdateVmUnderToken(*vm_token, op, {GuestAddress{address}, size}, permission,
                                          fd, offset));
+        const u8 state =
+            op == GuestAddressSpace::VmOperation::Unmap ? 0 : 0x80 | static_cast<u8>(permission);
+        for (u64 page = address / 4096; page < (address + size) / 4096; ++page) {
+            const auto watches =
+                op == GuestAddressSpace::VmOperation::Protect ? gpu_pages[page].load() & 24 : 0;
+            gpu_pages[page].store(state | watches, std::memory_order_release);
+            if (watches && ::mprotect(reinterpret_cast<void*>(page * 4096), 4096,
+                                      (state & 7) & ~(watches >> 3)) != 0)
+                throw std::runtime_error("VM protection could not preserve GPU tracking");
+        }
     }
     void* Map(VAddr address, u64 size, PAddr physical, bool executable) override {
         auto perm = GuestPermission::Read | GuestPermission::Write;
@@ -405,6 +448,31 @@ struct GuestRuntime::Impl final : GuestMemoryBackend {
     void Protect(VAddr address, u64 size, MemoryPermission permission) override {
         Update(GuestAddressSpace::VmOperation::Protect, address, size,
                Permission(static_cast<u32>(permission)));
+    }
+    bool IsGpuWatchFault(VAddr address, bool write) const override {
+        if (address >= ReservationEnd)
+            return false;
+        const u8 state = gpu_pages[address / 4096].load(std::memory_order_acquire);
+        const u8 access = write ? 2 : 1;
+        return (state & 0x80) && (state & access) && (state & ((access << 3) | (access << 5)));
+    }
+    void ProtectGpu(VAddr address, u64 size, MemoryPermission permission) override {
+        if (!space.OwnsRange({GuestAddress{address}, size}) || (address | size) % 4096)
+            throw std::runtime_error("invalid GPU watch range");
+        const u8 watch = (~static_cast<u8>(permission) & 3) << 3;
+        for (u64 page = address / 4096; page < (address + size) / 4096; ++page) {
+            const auto old = gpu_pages[page].load(std::memory_order_acquire);
+            // Never let GPU tracking alter executable code or revive an unmapped page.
+            if (!(old & 0x80) || (old & 4))
+                throw std::runtime_error("GPU watch requires mapped non-executable memory");
+            // Publish before protection; retain a retired-watch bit until the
+            // next VM mutation for faults already pending on another owner.
+            const u8 retired = ((old & 24) & ~watch) << 2;
+            gpu_pages[page].store((old & ~u8(24)) | watch | retired, std::memory_order_release);
+            const int prot = (old & 3) & static_cast<u8>(permission);
+            if (::mprotect(reinterpret_cast<void*>(page * 4096), 4096, prot) != 0)
+                throw std::runtime_error("GPU watch mprotect failed");
+        }
     }
     u64 Allocate(u64 size, std::string_view name, u64 base = 0x1000000000ULL) {
         void* address{};
@@ -589,6 +657,10 @@ struct GuestRuntime::Impl final : GuestMemoryBackend {
                 if (o->handle.IsValid())
                     handles.push_back(o->handle);
         }
+        if (storage)
+            storage->Cancel();
+        if (save_dialog)
+            save_dialog->Cancel();
         Status result = Ok();
         for (auto handle : handles) {
             auto s = cpu.RequestInterrupt(handle, InterruptReason::Cancel);
@@ -620,22 +692,36 @@ struct GuestRuntime::Impl final : GuestMemoryBackend {
         // Guest-facing libSceSystemService startup family; same policy as above.
         static const std::set<std::string> systemservice_functions{"fZo48un7LK4", "rPo6tV8D9bM",
                                                                    "656LMQSrg6U", "Vo5V8KAwCmk"};
-        // libSceGnmDriver: only owner registration (retail returns failure). The
-        // GPU submission/flip path is intentionally excluded and name-faults.
-        static const std::set<std::string> gnmdriver_functions{"ZFqKFl23aMc"};
-        static const std::set<std::string> videoout_functions{"Up36PTk687E", "6kPnj51T62Y",
-                                                              "8XGijEoThE0", "i6-sR91Wt-4",
-                                                              "1FZBKy8HeNU", "d1AjT2uZJn0"};
+        // Explicit checked GPU policies plus retail owner registration; unknown
+        // GNM entry points still produce a named unsupported-import fault.
+        auto gnmdriver_functions = graphics_gnm_nids;
+        gnmdriver_functions.insert("ZFqKFl23aMc");
+        std::set<std::string> videoout_functions{"Up36PTk687E", "6kPnj51T62Y", "8XGijEoThE0",
+                                                 "i6-sR91Wt-4", "1FZBKy8HeNU", "d1AjT2uZJn0"};
+        videoout_functions.insert(graphics_video_nids.begin(), graphics_video_nids.end());
+        const bool save_nid = std::any_of(std::begin(StorageEntries), std::end(StorageEntries),
+                                          [&](const auto& e) { return e.save && e.nid == nid; });
+        const bool dialog_nid = GuestSaveDialog::IsSaveNid(nid);
+        const bool common_nid = GuestSaveDialog::IsCommonNid(nid);
         const bool kernel_nid =
-            !videoout_functions.contains(nid) && !sysmodule_functions.contains(nid) &&
-            !userservice_functions.contains(nid) && !systemservice_functions.contains(nid) &&
-            !gnmdriver_functions.contains(nid) && nid != "NWtTN10cJzE";
+            !dialog_nid && !common_nid && !save_nid && !videoout_functions.contains(nid) &&
+            !sysmodule_functions.contains(nid) && !userservice_functions.contains(nid) &&
+            !systemservice_functions.contains(nid) && !gnmdriver_functions.contains(nid) &&
+            nid != "NWtTN10cJzE";
         std::shared_ptr<HleCallAdapter> adapter;
         if (auto it = handlers.find(nid);
             it != handlers.end() &&
             ((kernel_nid &&
               (symbol.name.substr(nid.size()) == "#libkernel#1#libkernel#Function" ||
                symbol.name.substr(nid.size()) == "#libScePosix#1#libkernel#Function")) ||
+             (save_dialog && dialog_nid &&
+              symbol.name.substr(nid.size()) ==
+                  "#libSceSaveDataDialog#1#libSceSaveDataDialog#Function") ||
+             (save_dialog && common_nid &&
+              symbol.name.substr(nid.size()) ==
+                  "#libSceCommonDialog#1#libSceCommonDialog#Function") ||
+             (save_nid &&
+              symbol.name.substr(nid.size()) == "#libSceSaveData#1#libSceSaveData#Function") ||
              (symbol.name.substr(nid.size()) == "#libSceSysmodule#1#libSceSysmodule#Function" &&
               sysmodule_functions.contains(nid)) ||
              (symbol.name.substr(nid.size()) == "#libSceUserService#1#libSceUserService#Function" &&
@@ -742,6 +828,89 @@ void GuestRuntime::Impl::InstallHandlers() {
                 return Ok();
             };
     };
+    auto dialog_handler = [this](std::string_view nid) {
+        handlers[std::string(nid)] = [this, nid](HleCallFrame& frame) {
+            if (!save_dialog)
+                return Status(MakeError(ErrorCategory::Unsupported, "SaveDialog",
+                                        "platform dialog unavailable"));
+            std::array<u64, 6> args{};
+            for (size_t i = 0; i < args.size(); ++i)
+                args[i] = frame.registers.Get(kSysVIntegerOrder[i]);
+            frame.registers.Set(Gpr::Rax, save_dialog->Invoke(nid, space, args));
+            return Ok();
+        };
+    };
+    for (auto nid : SaveDialogNids)
+        dialog_handler(nid);
+    dialog_handler("uoUpLGNkygk");
+    dialog_handler("BQ3tey0JmQM");
+    for (const auto& entry : StorageEntries) {
+        handlers[std::string(entry.nid)] = [this, entry](HleCallFrame& frame) {
+            if (!storage)
+                return Status(MakeError(ErrorCategory::Unsupported, "GuestStorage",
+                                        "valid persistent title identity is required"));
+            std::array<u64, 6> args{};
+            for (size_t i = 0; i < args.size(); ++i)
+                args[i] = frame.registers.Get(kSysVIntegerOrder[i]);
+            frame.registers.Set(Gpr::Rax,
+                                DispatchStorage(*storage, space, entry, args,
+                                                [this](int error) { return PosixFailure(error); }));
+            return Ok();
+        };
+    }
+    semaphore_domain = std::make_unique<GuestSemaphoreDomain>(space, [this] {
+        VmGuard vm(*this);
+        return Allocate(0x4000, "GuestSemaphore");
+    });
+    auto sem_bind = [&](const char* posix, const char* sce, auto fn) {
+        bind({posix}, [this, fn](const auto& a) -> u64 {
+            const int error = fn(a);
+            return error ? PosixFailure(error) : 0;
+        });
+        bind({sce}, [fn](const auto& a) -> u64 {
+            const int error = fn(a);
+            return error ? u64(0x80020000u | error) : 0;
+        });
+    };
+    sem_bind("pDuPEf3m4fI", "GEnUkDZoUwY", [this](const auto& a) {
+        return semaphore_domain->Init(a[0], s32(a[1]), u32(a[2]));
+    });
+    sem_bind("cDW233RAwWo", "Vwc+L05e6oE", [this](const auto& a) {
+        return semaphore_domain->Destroy(a[0]);
+    });
+    sem_bind("IKP8typ0QUk", "aishVAiFaYM", [this](const auto& a) {
+        return semaphore_domain->Post(a[0]);
+    });
+    sem_bind("Bq+LRV-N6Hk", "DjpBvGlaWbQ", [this](const auto& a) {
+        return semaphore_domain->GetValue(a[0], a[1]);
+    });
+    sem_bind("YCV5dGGBcCo", "C36iRE0F5sE", [this](const auto& a) {
+        return semaphore_domain->Wait(a[0], false, HleScope::Current()->CancellationToken());
+    });
+    sem_bind("WBWzsRifCEA", "H2a+IN9TP0E", [this](const auto& a) {
+        return semaphore_domain->Wait(a[0], true, HleScope::Current()->CancellationToken());
+    });
+    sem_bind("4SbrhCozqQU", "fjN6NQHhK8k", [this](const auto& a) {
+        return semaphore_domain->Wait(a[0], false, HleScope::Current()->CancellationToken(),
+            std::chrono::steady_clock::now() + std::chrono::microseconds(u32(a[1])));
+    });
+    bind({"w5IHyvahg-o"}, [this](const auto& a) -> u64 {
+        using Ts = Libraries::Kernel::OrbisKernelTimespec;
+        if (!space.ValidateRange({GuestAddress{a[1]}, sizeof(Ts)}, GuestPermission::Read))
+            return PosixFailure(POSIX_EFAULT);
+        std::chrono::nanoseconds absolute;
+        if (!GuestClock::Duration(Read<Ts>(a[1]), absolute)) return PosixFailure(POSIX_EINVAL);
+        Ts now{};
+        if (int error = clock.Read(Libraries::Kernel::ORBIS_CLOCK_REALTIME, now, false))
+            return PosixFailure(error);
+        const auto current = std::chrono::seconds(now.tv_sec) + std::chrono::nanoseconds(now.tv_nsec);
+        const auto steady = std::chrono::steady_clock::now();
+        const auto remaining = std::max(absolute - current, std::chrono::nanoseconds::zero());
+        const auto room = std::chrono::steady_clock::time_point::max() - steady;
+        const int error = semaphore_domain->Wait(a[0], false, HleScope::Current()->CancellationToken(),
+            steady + std::min(remaining, std::chrono::duration_cast<std::chrono::nanoseconds>(room)));
+        return error ? PosixFailure(error) : 0;
+    });
     mutex_domain = std::make_unique<GuestMutexDomain>(space, [this] {
         VmGuard vm(*this);
         return Allocate(0x4000, "GuestMutex");
@@ -1423,6 +1592,8 @@ void GuestRuntime::Impl::InstallHandlers() {
         Write(a[1], port->resolution);
         return 0;
     });
+    InstallGraphicsHandlers(handlers, graphics_gnm_nids, graphics_video_nids, space,
+                            [this]() -> GuestGraphics& { return Graphics(); });
     // libSceGnmDriver owner registration. On retail firmware this is not
     // available and returns failure; the guest tolerates that. Validate the
     // guest name string (when present) and return the real retail code. The GPU
@@ -1453,6 +1624,11 @@ void GuestRuntime::Impl::InstallHandlers() {
 GuestRuntime::GuestRuntime(CpuContext& cpu, GuestAddressSpace& space, HleCallRegistry& registry)
     : impl(std::make_unique<Impl>(cpu, space, registry)) {}
 GuestRuntime::~GuestRuntime() = default;
+void GuestRuntime::ConfigureSaveDialog(std::shared_ptr<GuestSaveDialog> dialog) {
+    if (impl->prepared)
+        throw std::logic_error("dialog must be installed before Prepare");
+    impl->save_dialog = std::move(dialog);
+}
 void GuestRuntime::ConfigureGraphics(std::shared_ptr<Frontend::Window> window,
                                      std::shared_ptr<const Vulkan::Driver> driver) {
     if (impl->prepared || !window || !driver)
@@ -1539,13 +1715,14 @@ void GuestRuntime::Prepare(const std::filesystem::path& executable,
             throw std::runtime_error("invalid process parameters");
         sdk = param->sdk_version;
     }
-    std::string serial, title, version;
+    std::string serial, title, version, save_title;
     u32 attributes{};
     if (auto bytes = impl->mounts.ReadFile("/app0/sce_sys/param.sfo")) {
         PSF psf;
         if (!psf.Open(*bytes))
             throw std::runtime_error("invalid installed param.sfo");
         serial = psf.GetString("TITLE_ID").value_or("");
+        save_title = psf.GetString("INSTALL_DIR_SAVEDATA").value_or(serial);
         title = psf.GetString("TITLE").value_or("");
         version = psf.GetString("APP_VER").value_or("");
         attributes = psf.GetInteger("ATTRIBUTE").value_or(0);
@@ -1559,6 +1736,16 @@ void GuestRuntime::Prepare(const std::filesystem::path& executable,
         users[0] = {user->user_id, user->user_name};
     else
         users[0] = {1000, "shadPS4"}; // Same initial local profile as UserManager.
+    if (GuestStorage::ValidTitle(save_title)) {
+        impl->storage = std::make_unique<GuestStorage>(impl->mounts, EmulatorSettings.GetHomeDir(),
+                                                       save_title, users[0].id);
+        impl->sysmodules.Publish("libSceSaveData", 0x10000005);
+        if (impl->save_dialog) {
+            impl->save_dialog->Configure(EmulatorSettings.GetHomeDir(), save_title, users[0].id);
+            impl->sysmodules.Publish("libSceSaveDataDialog", 0x10000006);
+            impl->sysmodules.Publish("libSceCommonDialog", 0x10000007);
+        }
+    }
     impl->platform = std::make_unique<GuestPlatform>(std::move(users), sdk,
                                                      EmulatorSettings.GetConsoleLanguage(),
                                                      EmulatorSettings.IsCircleEnter());
@@ -1657,6 +1844,8 @@ Result<GuestCallResult> GuestRuntime::Run(const std::vector<std::string>& args) 
         result.stop_epoch = run.Value().snapshot.stop_epoch;
         owner->result = result;
         impl->Finish(owner);
+        if (impl->graphics)
+            impl->graphics->CheckHealth();
         if (owner->error)
             return *owner->error;
         return *owner->result;
@@ -1698,6 +1887,7 @@ std::string GuestRuntime::Diagnostics() const {
     {
         std::scoped_lock lock(impl->graphics_mutex);
         text += impl->graphics ? " graphics=ready" : " graphics=not-created";
+        if (impl->graphics) text += " guest_presents=" + std::to_string(impl->graphics->VideoOut().guest_presents.load());
     }
     text += " modules=" + std::to_string(impl->init_order.size() + 1);
     return text;

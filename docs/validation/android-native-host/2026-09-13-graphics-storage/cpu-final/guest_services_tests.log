@@ -1,0 +1,71 @@
+PASS default init
+PASS guest ABI prefix flags
+PASS lock owner
+PASS recursive errorcheck
+PASS foreign unlock
+PASS busy trylock
+PASS owned destroy busy
+PASS waiter actually queued
+PASS cancel lock bounded
+PASS cancel lock result
+PASS owner retained after cancellation
+PASS unlock
+PASS destroy
+PASS stale handle
+PASS attribute init
+PASS recursive type
+PASS recursive init
+PASS recursive lock twice
+PASS recursive unlock twice
+PASS bad attribute type
+PASS attribute destroy
+PASS stale attribute
+PASS condition init
+PASS condition no waiter broadcast
+PASS condition owner lock
+PASS condition releases mutex
+PASS condition destroy busy
+PASS signal
+PASS notified waiter is reacquiring
+PASS condition remains alive during reacquire
+PASS wait must reacquire
+PASS signaller unlock
+PASS condition returned with mutex
+PASS second condition releases
+PASS terminal cancel does not wait for stopped owner
+PASS condition cancelled
+PASS no dangling waiter
+PASS other owner retained
+PASS clock initialized outside desktop registry
+PASS bad clock is errno
+PASS duration overflow rejected
+PASS invalid nanoseconds rejected
+PASS duration zero
+PASS unknown sysmodule rejected
+PASS required name does not imply provider
+PASS failed load not visible
+PASS initialized provider admits load
+PASS repeated load same provider
+PASS first unload preserves live ref
+PASS last unload hides handle
+PASS extra unload rejected
+PASS static provider reload stable
+PASS user service admission
+PASS user initialize
+PASS duplicate initialize rejected
+PASS second session independently initialized
+PASS login event
+PASS event consumed exactly once
+PASS other session event retained
+PASS profile name
+PASS unknown user not fabricated
+PASS splash state isolated
+PASS background state isolated
+PASS resume event queued
+PASS resume consumed once
+PASS system language uses session SDK
+PASS UTC timezone matches guest clock
+PASS unknown system param fails without write
+PASS terminate closes admission
+PASS initialize after terminate renews login
+GUEST_SERVICES checks=70 failures=0

@@ -56,6 +56,7 @@ public:
     // The session owner must call this before joining rendering workers.
     void RequestStop() {
         swapchain.RequestStop();
+        free_cv.notify_all();
     }
 
     HostPasses::PostProcessingPass::Settings& GetPPSettingsRef() {
@@ -107,7 +108,7 @@ public:
 
     Frame* PrepareBlankFrame(bool present_thread);
 
-    void Present(Frame* frame, bool is_reusing_frame = false);
+    bool Present(Frame* frame, bool is_reusing_frame = false);
     Frame* PrepareLastFrame();
 
 private:

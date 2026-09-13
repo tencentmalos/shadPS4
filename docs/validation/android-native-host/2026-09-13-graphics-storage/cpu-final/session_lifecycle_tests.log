@@ -1,0 +1,14 @@
+session_lifecycle_tests
+Case1: Stop-vs-Destroy window (UAF closed)
+Case2: Stop during Preparing (context not published)
+Case3: Prepare failure and owner-spawn failure
+Case4: late old-generation stop is rejected
+Case5: GuestFault maps to Failed, not exit-0
+Case6: Prepare exception -> Failed terminal (no abort)
+Case7: Run exception -> Failed terminal (no abort)
+Case8: RequestCancel exception -> Error, lease returned
+Case9: slow control drain still reclaims (no strand, no UAF)
+Case10: generation-scoped platform admission/cancel/restart
+Fixture: 100 rounds, rotating interleavings
+
+840 checks, 0 failures

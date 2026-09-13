@@ -1,0 +1,22 @@
+HLE veneer allocator contract
+[1   ] Create maps the slab                                             PASS
+[2   ] operation zero is refused without consuming a slot               PASS
+[3   ] every veneer emitted the exact stub with its op                  PASS
+[4   ] veneers are packed 16 bytes apart                                PASS -- 0x7d55d55000 0x7d55d55010 0x7d55d55020 0x7d55d55030
+[5   ] first veneer sits at the slab base                               PASS
+[6   ] re-allocating an op returns the cached VA                        PASS
+[7   ] op count reflects unique operations only                         PASS -- count=4
+[8   ] populated range spans exactly the used slots                     PASS -- size=0x40
+[9   ] Seal during execution refuses and keeps NX                       PASS
+[10  ] Seal succeeds                                                    PASS
+[11  ] allocator reports sealed                                         PASS
+[12  ] Allocate after Seal is refused                                   PASS
+[13  ] veneer bytes are intact after sealing                            PASS
+[14  ] unused aligned tail slot traps through reserved op zero          PASS
+[15  ] published mapping is entirely RX                                 PASS
+[16  ] empty sealed slab stays NX                                       PASS
+[17  ] a slab smaller than one veneer is refused                        PASS
+[18  ] a full slab accepts exactly capacity veneers                     PASS -- capacity=256
+[19  ] allocating past the slab is refused with OutOfMemory             PASS
+
+19 check(s), ALL PASS (0 failures)

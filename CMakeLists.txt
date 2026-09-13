@@ -1604,8 +1604,12 @@ if(BUILD_HOST_CORE)
     target_compile_definitions(shadps4 PRIVATE SHADPS4_TYPED_HLE_HOST=1)
     add_subdirectory(foundation/modules/input foundation/input EXCLUDE_FROM_ALL)
     target_sources(shadps4 PRIVATE src/core/host_runtime/orbis_pad_adapter.cpp
+        src/core/host_runtime/guest_save_dialog.cpp
+        src/core/host_runtime/guest_storage.cpp
+        src/core/host_runtime/guest_storage_hle.cpp
         src/core/host_runtime/guest_runtime.cpp
-        src/core/host_runtime/guest_graphics.cpp)
+        src/core/host_runtime/guest_graphics.cpp
+        src/core/host_runtime/guest_graphics_hle.cpp)
     target_link_libraries(shadps4 PRIVATE spatial::foundation_input)
     get_target_property(host_dependencies shadps4 LINK_LIBRARIES)
     add_library(shadps4_host_dependencies INTERFACE)

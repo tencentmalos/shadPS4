@@ -1,0 +1,14 @@
+[1/14] Building CXX object CMakeFiles/session_lifecycle_tests.dir/Users/bytedance/workspace/emulations/ps4/shadps4/src/core/host_runtime/session_backend.cpp.o
+[2/14] Building CXX object CMakeFiles/session_lifecycle_tests.dir/Users/bytedance/workspace/emulations/ps4/shadps4/tests/host_runtime/session_lifecycle_tests.cpp.o
+[3/14] Building CXX object CMakeFiles/session_lifecycle_tests.dir/Users/bytedance/workspace/emulations/ps4/shadps4/src/core/host_runtime/session_core.cpp.o
+[4/14] Building CXX object guest_cpu/CMakeFiles/guest_cpu_api.dir/api/address_space.cpp.o
+[5/14] Linking CXX static library guest_cpu/libguest_cpu_api.a
+[6/14] Linking CXX executable session_lifecycle_tests
+[7/14] Linking CXX executable hle_registration_tests
+[8/14] Linking CXX executable guest_cpu_hle_abi_tests
+[9/14] Linking CXX executable guest_cpu_contract_tests
+[10/14] Linking CXX executable guest_services_tests
+[11/14] Linking CXX executable veneer_allocator_tests
+[12/14] Building CXX object CMakeFiles/guest_cpu_fex.dir/Users/bytedance/workspace/emulations/ps4/shadps4/src/core/guest_cpu/fex/fex_context.cpp.o
+[13/14] Linking CXX static library libguest_cpu_fex.a
+[14/14] Linking CXX executable guest_execution_tests

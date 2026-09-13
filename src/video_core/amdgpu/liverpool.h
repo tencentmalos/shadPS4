@@ -59,6 +59,8 @@ struct Liverpool {
         CbColor7Cmask = 0xA388,
     };
 
+    std::atomic<bool> stopping{};
+    std::atomic<bool> processing{};
     Regs regs{};
     std::array<CbDbExtent, NUM_COLOR_BUFFERS> last_cb_extent{};
     CbDbExtent last_db_extent{};
@@ -66,6 +68,26 @@ struct Liverpool {
 public:
     explicit Liverpool();
     ~Liverpool();
+    void RequestStop();
+    std::function<void(std::exception_ptr)> fault_handler;
+    std::mutex failure_mutex;
+    std::exception_ptr failure;
+    void CheckFault() {
+        std::scoped_lock lock(failure_mutex);
+        if (failure) std::rethrow_exception(failure);
+    }
+    void ReportFault(std::exception_ptr error) {
+        { std::scoped_lock lock(failure_mutex); if (failure) return; failure = error; }
+        if (fault_handler) fault_handler(error);
+        else std::rethrow_exception(error);
+    }
+    void UseOwnedSubmissions() {
+        owned_submissions = true;
+    }
+    bool owned_submissions{};
+    bool StopRequested() const {
+        return stopping.load();
+    }
 
     void SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb);
     void SubmitAsc(u32 gnm_vqid, std::span<const u32> acb);
@@ -80,11 +102,11 @@ public:
 
     void WaitGpuIdle() noexcept {
         std::unique_lock lk{submit_mutex};
-        submit_cv.wait(lk, [this] { return num_submits == 0; });
+        submit_cv.wait(lk, [this] { return stopping || num_submits == 0; });
     }
 
     bool IsGpuIdle() const {
-        return num_submits == 0;
+        return num_submits == 0 && num_commands == 0 && !processing && !submit_done;
     }
 
     void SetVoPort(Libraries::VideoOut::VideoOutPort* port) {
@@ -97,21 +119,30 @@ public:
 
     template <bool wait_done = false>
     void SendCommand(auto&& func) {
+        CheckFault();
         if (std::this_thread::get_id() == gpu_id) {
             return func();
         }
         if constexpr (wait_done) {
             std::binary_semaphore sem{0};
+            std::exception_ptr error;
             {
                 std::scoped_lock lk{submit_mutex};
-                command_queue.emplace([&sem, &func] {
+                command_queue.emplace([this, &sem, &func, &error] {
+                    try {
+                        CheckFault();
                     func();
+                    } catch (...) {
+                        error = std::current_exception();
+                    }
                     sem.release();
                 });
                 ++num_commands;
                 submit_cv.notify_one();
             }
             sem.acquire();
+            if (error)
+                std::rethrow_exception(error);
         } else {
             std::scoped_lock lk{submit_mutex};
             command_queue.emplace(std::move(func));
@@ -158,12 +189,9 @@ private:
             static constexpr std::suspend_always final_suspend() noexcept {
                 return {};
             }
+            std::exception_ptr error;
             void unhandled_exception() {
-                try {
-                    std::rethrow_exception(std::current_exception());
-                } catch (const std::exception& e) {
-                    UNREACHABLE_MSG("Unhandled exception: {}", e.what());
-                }
+                error = std::current_exception();
             }
             void return_void() {}
             struct empty {};
@@ -173,11 +201,31 @@ private:
         };
 
         using Handle = std::coroutine_handle<promise_type>;
-        Handle handle;
+        Handle handle{};
+        Task() = default;
+        Task(const Task&) = delete;
+        Task(Task&& other) noexcept : handle(std::exchange(other.handle, {})) {}
+        Task& operator=(Task&& other) noexcept {
+            if (this != &other) {
+                if (handle)
+                    handle.destroy();
+                handle = std::exchange(other.handle, {});
+            }
+            return *this;
+        }
+        ~Task() {
+            if (handle)
+                handle.destroy();
+        }
+        Handle Release() {
+            return std::exchange(handle, {});
+        }
     };
 
     using CmdBuffer = std::pair<std::span<const u32>, std::span<const u32>>;
+    Task ProcessOwnedCompute(std::vector<u32> acb, u32 vqid);
     CmdBuffer CopyCmdBuffers(std::span<const u32> dcb, std::span<const u32> ccb);
+    Task ProcessOwnedGraphics(std::vector<u32> dcb, std::vector<u32> ccb);
     Task ProcessGraphics(std::span<const u32> dcb, std::span<const u32> ccb);
     Task ProcessCeUpdate(std::span<const u32> ccb);
     template <bool is_indirect = false>

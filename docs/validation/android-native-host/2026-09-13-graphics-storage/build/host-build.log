@@ -1,0 +1,24 @@
+[1/121] Generating CXX dyndep file externals/pugixml/CMakeFiles/pugixml-static.dir/CXX.dd
+[2/119] Generating CXX dyndep file externals/openal-soft/CMakeFiles/OpenAL.dir/CXX.dd
+[3/24] Performing build step for 'ffmpeg_android_build'
+[4/24] No install step for 'ffmpeg_android_build'
+[5/24] Completed 'ffmpeg_android_build'
+[6/24] Building CXX object CMakeFiles/shadps4.dir/src/common/scm_rev.cpp.o
+[7/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/avplayer/avplayer_file_streamer.cpp.o
+[8/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/ajm/ajm_instance.cpp.o
+[9/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/ajm/ajm_mp3.cpp.o
+[10/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/ajm/ajm_context.cpp.o
+[11/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/avplayer/avplayer_handle_streamer.cpp.o
+[12/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/ajm/ajm.cpp.o
+[13/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/videodec/video_utils.cpp.o
+[14/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/videodec/videodec2_impl.cpp.o
+[15/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/save_data/save_instance.cpp.o
+[16/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/videodec/videodec.cpp.o
+[17/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/videodec/videodec2.cpp.o
+[18/24] Building CXX object CMakeFiles/shadps4.dir/src/core/libraries/videodec/videodec_impl.cpp.o
+[19/24] Building CXX object CMakeFiles/host_library_smoke.dir/tests/host_runtime/host_library_smoke.cpp.o
+[20/24] Building CXX object CMakeFiles/shadps4.dir/src/core/host_runtime/guest_graphics.cpp.o
+[21/24] Building CXX object CMakeFiles/shadps4.dir/src/core/host_runtime/guest_runtime.cpp.o
+[22/24] Building CXX object CMakeFiles/shadps4.dir/src/core/host_runtime/guest_graphics_hle.cpp.o
+[23/24] Linking CXX shared library libshadps4_host.so
+[24/24] Linking CXX executable host_library_smoke

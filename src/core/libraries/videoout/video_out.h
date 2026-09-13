@@ -12,6 +12,8 @@ class SymbolsResolver;
 }
 
 namespace Libraries::VideoOut {
+class VideoOutDriver;
+void BindSessionDriver(VideoOutDriver* driver);
 
 // SceVideoOutBusType
 constexpr int SCE_VIDEO_OUT_BUS_TYPE_MAIN = 0;                    // Main output

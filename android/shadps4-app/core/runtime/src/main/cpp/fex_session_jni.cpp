@@ -3,25 +3,25 @@
 
 // JNI surface for the shadps4-app in-process FEX session.
 //
-// This is now a THIN adapter over Core::HostRuntime::SessionCore. All lifecycle,
-// threading, generation and teardown logic lives in the backend-free SessionCore
-// (src/core/host_runtime), which is unit-tested on the host with a FakeBackend.
-// This file only:
+// This is now a THIN adapter over Core::HostRuntime::SessionCore. All
+// lifecycle, threading, generation and teardown logic lives in the backend-free
+// SessionCore (src/core/host_runtime), which is unit-tested on the host with a
+// FakeBackend. This file only:
 //   * owns one process-global SessionCore bound to the real FexSessionBackend,
 //   * marshals stable POD / copied strings across JNI (never a native/guest
 //     pointer),
 //   * catches every C++ exception at the boundary and turns it into a defined
 //     error value, so an exception never crosses JNI.
 //
-// The session still runs a bounded x86-64 decrement loop (CPU-alive proof); it is
-// NOT a real PS4 game (the Android host is not yet native -- see HN1/HN2 in
+// The session still runs a bounded x86-64 decrement loop (CPU-alive proof); it
+// is NOT a real PS4 game (the Android host is not yet native -- see HN1/HN2 in
 // docs/specs/android-native-host-v1.md).
 //
 // The old defects this replaces: a non-owner Stop dereferenced a raw CpuContext
-// the owner could free concurrently (UAF); a Stop during preparation was dropped;
-// two callers raced one std::thread::join; a guest fault was reported as exit 0.
-// SessionCore fixes all four; this file cannot reintroduce them because it holds
-// no raw runtime pointer and performs no join itself.
+// the owner could free concurrently (UAF); a Stop during preparation was
+// dropped; two callers raced one std::thread::join; a guest fault was reported
+// as exit 0. SessionCore fixes all four; this file cannot reintroduce them
+// because it holds no raw runtime pointer and performs no join itself.
 
 #include <jni.h>
 
@@ -34,6 +34,7 @@
 
 #include <android/log.h>
 
+#include "core/host_runtime/guest_save_dialog.h"
 #include "core/host_runtime/session_backend_fex.h"
 #include "core/host_runtime/session_core.h"
 
@@ -59,6 +60,24 @@ SessionCore& Session() {
     return core;
 }
 
+std::mutex dialog_mutex;
+std::uint64_t dialog_generation{};
+std::weak_ptr<Core::HostRuntime::GuestSaveDialog> dialog_weak;
+std::shared_ptr<Core::HostRuntime::GuestSaveDialog>
+CreateDialog(std::uint64_t generation) {
+  auto dialog = std::make_shared<Core::HostRuntime::GuestSaveDialog>();
+  std::lock_guard lock(dialog_mutex);
+  dialog_generation = generation;
+  dialog_weak = dialog;
+  return dialog;
+}
+std::shared_ptr<Core::HostRuntime::GuestSaveDialog>
+GetDialog(std::uint64_t generation) {
+  if (!generation || Session().CurrentGeneration() != generation)
+    return {};
+  std::lock_guard lock(dialog_mutex);
+  return dialog_generation == generation ? dialog_weak.lock() : nullptr;
+}
 std::uint64_t MsToNs(jlong ms) {
     return ms > 0 ? static_cast<std::uint64_t>(ms) * 1'000'000ull : 0ull;
 }
@@ -84,8 +103,8 @@ Java_com_shadps4_android_runtime_session_NativeFexSession_nativeIdentity(JNIEnv*
     }
 }
 
-// Starts a session. Returns the new generation (>0), or 0 if a session is already
-// running or the owner thread could not be spawned.
+// Starts a session. Returns the new generation (>0), or 0 if a session is
+// already running or the owner thread could not be spawned.
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_shadps4_android_runtime_session_NativeFexSession_nativeStart(JNIEnv* env, jclass,
                                                                       jstring content_id,
@@ -128,7 +147,9 @@ Java_com_shadps4_android_runtime_session_NativeFexSession_nativeStartExecutable(
         SessionParams params;
         params.content_id = copy(content_id);
         params.executable_path = copy(executable_path);
-        if (params.executable_path.empty()) return 0;
+    params.create_save_dialog = CreateDialog;
+    if (params.executable_path.empty())
+      return 0;
         return static_cast<jlong>(Session().Start(params));
     } catch (const std::exception& e) {
         __android_log_print(ANDROID_LOG_ERROR, kTag, "nativeStartExecutable: %s", e.what());
@@ -165,8 +186,8 @@ Java_com_shadps4_android_runtime_session_NativeFexSession_nativeWaitPhase(JNIEnv
     }
 }
 
-// Waits for a terminal. Returns the RunOutcome ordinal, or -1 on timeout (session
-// still owned; NOT idle).
+// Waits for a terminal. Returns the RunOutcome ordinal, or -1 on timeout
+// (session still owned; NOT idle).
 extern "C" JNIEXPORT jint JNICALL
 Java_com_shadps4_android_runtime_session_NativeFexSession_nativeWaitTerminal(JNIEnv*, jclass,
                                                                             jlong generation,
@@ -350,6 +371,7 @@ Java_com_shadps4_android_runtime_session_NativeFexSession_nativeStartRenderedExe
     SessionParams params;
     params.content_id = copy(content_id);
     params.executable_path = copy(executable_path);
+    params.create_save_dialog = CreateDialog;
     params.requires_platform_ready = true;
     params.create_window = [native](std::uint64_t generation) {
       return std::make_shared<Frontend::AndroidWindow>(native.get(),
@@ -373,6 +395,31 @@ Java_com_shadps4_android_runtime_session_NativeFexSession_nativePlatformReady(
     JNIEnv *, jclass, jlong generation) {
   try {
     return Session().PlatformReady(static_cast<std::uint64_t>(generation));
+  } catch (...) {
+    return false;
+  }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_shadps4_android_runtime_session_NativeFexSession_nativeSaveDialogSnapshot(
+    JNIEnv *env, jclass, jlong generation) {
+  try {
+    auto dialog = GetDialog(generation);
+    if (!dialog)
+      return nullptr;
+    auto text = dialog->SnapshotJson();
+    return text.empty() ? nullptr : env->NewStringUTF(text.c_str());
+  } catch (...) {
+    return nullptr;
+  }
+}
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_shadps4_android_runtime_session_NativeFexSession_nativeSaveDialogRespond(
+    JNIEnv *, jclass, jlong generation, jlong request, jint action,
+    jint selection) {
+  try {
+    auto dialog = GetDialog(generation);
+    return dialog && dialog->Respond(request, action, selection);
   } catch (...) {
     return false;
   }

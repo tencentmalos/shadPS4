@@ -27,12 +27,15 @@ static const char* ccb_task_name{"CCB_TASK"};
 static_assert(Liverpool::NumComputeRings <= MAX_NAMES);
 
 #define NAME_NUM(z, n, name) BOOST_PP_STRINGIZE(name) BOOST_PP_STRINGIZE(n),
-#define NAME_ARRAY(name, num) {BOOST_PP_REPEAT(num, NAME_NUM, name)}
+#define NAME_ARRAY(name, num)                                                                      \
+    { BOOST_PP_REPEAT(num, NAME_NUM, name) }
 
 static const char* acb_task_name[] = NAME_ARRAY(ACB_TASK, MAX_NAMES);
 
 #define YIELD(name)                                                                                \
     FIBER_EXIT;                                                                                    \
+    if (stopping)                                                                                  \
+        co_return;                                                                                 \
     co_yield {};                                                                                   \
     FIBER_ENTER(name);
 
@@ -43,6 +46,8 @@ static const char* acb_task_name[] = NAME_ARRAY(ACB_TASK, MAX_NAMES);
 #define RESUME(task, name)                                                                         \
     FIBER_EXIT;                                                                                    \
     task.handle.resume();                                                                          \
+    if (task.handle.promise().error)                                                               \
+        std::rethrow_exception(task.handle.promise().error);                                       \
     FIBER_ENTER(name);
 
 #define RESUME_CE(task) RESUME(task, ccb_task_name)
@@ -67,12 +72,41 @@ static std::span<const u32> NextPacket(std::span<const u32> span, size_t offset)
 
 Liverpool::Liverpool() {
     num_counter_pairs = Libraries::Kernel::sceKernelIsNeoMode() ? 16 : 8;
-    process_thread = std::jthread{std::bind_front(&Liverpool::Process, this)};
+    process_thread = std::jthread{[this](std::stop_token token) {
+        try { Process(token); }
+        catch (...) {
+            ReportFault(std::current_exception());
+            // Wake pending synchronous native commands with their real failure;
+            // keep servicing the queue until Session retires its CPU owners.
+            while (!token.stop_requested()) {
+                { std::unique_lock lock(submit_mutex);
+                  Common::CondvarWait(submit_cv, lock, token, [this] { return num_commands != 0; }); }
+                ProcessCommands();
+            }
+        }
+    }};
+}
+
+void Liverpool::RequestStop() {
+    stopping = true;
+    if (vo_port) {
+        vo_port->stopping = true;
+        vo_port->vo_cv.notify_all();
+    }
+    submit_cv.notify_all();
 }
 
 Liverpool::~Liverpool() {
+    RequestStop();
     process_thread.request_stop();
+    submit_cv.notify_all();
     process_thread.join();
+    for (auto& queue : mapped_queues) {
+        while (!queue.submits.empty()) {
+            queue.submits.front().destroy();
+            queue.submits.pop();
+        }
+    }
 }
 
 void Liverpool::ProcessCommands() {
@@ -85,7 +119,11 @@ void Liverpool::ProcessCommands() {
             command_queue.pop();
             --num_commands;
         }
+        try {
         callback();
+        } catch (...) {
+            ReportFault(std::current_exception());
+        }
     }
 }
 
@@ -103,11 +141,12 @@ void Liverpool::Process(std::stop_token stoken) {
             break;
         }
 
+        processing = true;
         VideoCore::StartCapture();
 
         curr_qid = -1;
 
-        while (num_submits || num_commands) {
+        while (!stoken.stop_requested() && (num_submits || num_commands)) {
             ProcessCommands();
 
             curr_qid = (curr_qid + 1) % num_mapped_queues;
@@ -125,6 +164,8 @@ void Liverpool::Process(std::stop_token stoken) {
             task.resume();
 
             if (task.done()) {
+                if (task.promise().error)
+                    ReportFault(task.promise().error);
                 task.destroy();
 
                 std::scoped_lock lock{queue.m_access};
@@ -146,13 +187,15 @@ void Liverpool::Process(std::stop_token stoken) {
         }
 
         Platform::IrqC::Instance()->Signal(Platform::InterruptId::GpuIdle);
+        processing = false;
+        submit_cv.notify_all();
     }
 }
 
 Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
     FIBER_ENTER(ccb_task_name);
 
-    while (!ccb.empty()) {
+    while (!stopping && !ccb.empty()) {
         ProcessCommands();
 
         const auto* header = reinterpret_cast<const PM4Header*>(ccb.data());
@@ -233,7 +276,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     const bool guest_markers_enabled = rasterizer && EmulatorSettings.IsVkGuestMarkersEnabled();
 
     const auto base_addr = reinterpret_cast<uintptr_t>(dcb.data());
-    while (!dcb.empty()) {
+    while (!stopping && !dcb.empty()) {
         ProcessCommands();
 
         const auto* header = reinterpret_cast<const PM4Header*>(dcb.data());
@@ -817,7 +860,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 // there are no other submits to yield to we can sleep the thread
                 // instead and allow other tasks to run.
                 const u64* wait_addr = wait_reg_mem->Address<u64*>();
-                if (vo_port->IsVoLabel(wait_addr) &&
+                if (vo_port && vo_port->IsVoLabel(wait_addr) &&
                     num_submits == mapped_queues[GfxQueueId].submits.size()) {
                     vo_port->WaitVoLabel([&] { return wait_reg_mem->Test(regs.reg_array); });
                     break;
@@ -895,7 +938,6 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         while (!ce_task.handle.done()) {
             RESUME_GFX(ce_task);
         }
-        ce_task.handle.destroy();
     }
 
     FIBER_EXIT;
@@ -915,7 +957,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
 
     auto base_addr = reinterpret_cast<VAddr>(acb.data());
     size_t acb_size = acb.size_bytes();
-    while (!acb.empty()) {
+    while (!stopping && !acb.empty()) {
         ProcessCommands();
 
         auto* header = reinterpret_cast<const PM4Header*>(acb.data());
@@ -1208,17 +1250,30 @@ Liverpool::CmdBuffer Liverpool::CopyCmdBuffers(std::span<const u32> dcb, std::sp
     return std::make_pair(dcb, ccb);
 }
 
+Liverpool::Task Liverpool::ProcessOwnedGraphics(std::vector<u32> dcb, std::vector<u32> ccb) {
+    auto task = ProcessGraphics(dcb, ccb);
+    while (!task.handle.done() && !stopping) {
+        task.handle.resume();
+        if (!task.handle.done())
+            co_yield {};
+    }
+    if (task.handle.promise().error)
+        std::rethrow_exception(task.handle.promise().error);
+}
+
 void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
 
-    if (EmulatorSettings.IsCopyGpuBuffers()) {
+    if (!owned_submissions && EmulatorSettings.IsCopyGpuBuffers()) {
         std::tie(dcb, ccb) = CopyCmdBuffers(dcb, ccb);
     }
 
-    auto task = ProcessGraphics(dcb, ccb);
+    auto task = owned_submissions
+                    ? ProcessOwnedGraphics({dcb.begin(), dcb.end()}, {ccb.begin(), ccb.end()})
+                    : ProcessGraphics(dcb, ccb);
     {
         std::scoped_lock lock{queue.m_access};
-        queue.submits.emplace(task.handle);
+        queue.submits.emplace(task.Release());
     }
 
     std::scoped_lock lk{submit_mutex};
@@ -1226,15 +1281,27 @@ void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     submit_cv.notify_one();
 }
 
+Liverpool::Task Liverpool::ProcessOwnedCompute(std::vector<u32> acb, u32 vqid) {
+    auto task = ProcessCompute(acb, vqid);
+    while (!task.handle.done() && !stopping) {
+        task.handle.resume();
+        if (!task.handle.done())
+            co_yield {};
+    }
+    if (task.handle.promise().error)
+        std::rethrow_exception(task.handle.promise().error);
+}
+
 void Liverpool::SubmitAsc(u32 gnm_vqid, std::span<const u32> acb) {
     ASSERT_MSG(gnm_vqid > 0 && gnm_vqid < NumTotalQueues, "Invalid virtual ASC queue index");
     auto& queue = mapped_queues[gnm_vqid];
 
     const auto vqid = gnm_vqid - 1;
-    const auto& task = ProcessCompute(acb, vqid);
+    auto task = owned_submissions ? ProcessOwnedCompute({acb.begin(), acb.end()}, vqid)
+                                  : ProcessCompute(acb, vqid);
     {
         std::scoped_lock lock{queue.m_access};
-        queue.submits.emplace(task.handle);
+        queue.submits.emplace(task.Release());
     }
 
     std::scoped_lock lk{submit_mutex};
